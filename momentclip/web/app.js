@@ -74,7 +74,7 @@
   wire("#persona", () => {});
   wire("#clen", () => {});
   wire("#aspect", () => {});
-    wire("#mood", () => {});
+  wire("#mood", () => {});
   wire("#model", () => {
     const m = pick("#model");
     $("#promptwrap").classList.toggle("hidden", m !== "anything");
@@ -94,7 +94,6 @@
     const vision = p.vision ? " · reads images" : "";
     n.innerHTML = `${free}${local}<br>${esc(p.note || "")} · ${esc(p.status)}${vision}`;
   }
-  let CAPS_PROV = [];
 
   // ---------- caption style cards ----------
   // Thumbnail is drawn from the SAME parameters the .ass file is built from,
@@ -103,11 +102,6 @@
   let CAPS = [];
   let CAPS_PROV = [];
   let chosenStyle = "pop";
-
-  function pick(sel) {
-    const on = $(`${sel} button.on`);
-    return on ? on.dataset.v : null;
-  }
 
   function cssText(p) {
     const weight = p.bold ? 900 : 500;

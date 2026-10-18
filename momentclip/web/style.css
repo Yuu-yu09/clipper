@@ -144,8 +144,11 @@ h1 {
 .gear:hover { color: var(--text); border-color: var(--accent); }
 
 .enginepanel { max-width: 1180px; margin: 0 auto; padding: 16px 32px 0; width: 100%; }
+/* Field labels only. `:not(.sw)` matters: every switch is itself a <label>
+   inside .opt, and without this it inherits the mono uppercase field-label
+   treatment, which is wrong for a sentence of interface copy. */
 .enginepanel > label,
-.opt > label,
+.opt > label:not(.sw),
 .flabel,
 .modelrow > label {
   display: block;
