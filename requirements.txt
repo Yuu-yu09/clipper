@@ -13,8 +13,18 @@ numpy>=1.24
 
 # --- graph (required for the moment graph) ---
 networkx>=3.0
-# python-louvain            # optional: better communities than the fallback
-# graphifyy                  # optional: Apache-2.0, used when installed
+
+# Community detection. The moment graph's structural features -- which clips
+# bridge two parts of the episode, where the natural arcs are -- are all
+# defined in terms of communities, so this is not cosmetic.
+#   pip install leidenalg     # pulls igraph; Leiden, which is what we document
+# Without it, networkx's greedy modularity is used instead. It still works but
+# it is a weaker algorithm, and /api/health will say so via cluster_backend.
+leidenalg>=0.10
+# python-louvain            # optional alternative: Louvain
+# graphify                  # optional, used when installed. NOTE: there is no
+#                           # package by this name on PyPI, so this line will
+#                           # never resolve unless you vendor it yourself.
 
 # --- transcription ---
 # faster-whisper>=1.0        # local, free, word-level timestamps  <-- recommended

@@ -59,6 +59,14 @@ def _content_terms(text: str, limit: int = 12) -> list[str]:
 
 
 def graphify_available() -> bool:
+    """Whether the optional Graphify backend is importable.
+
+    Graphify is not published on PyPI, so in practice this is always False
+    and the networkx backend below does the work. The hook is kept because it
+    is a clean seam for anyone who vendors it internally -- but nothing in
+    this repository depends on it, and /api/health reports the backend that
+    actually ran rather than the one that was hoped for.
+    """
     try:
         import graphify  # noqa: F401  (presence is the check)
         return True
@@ -66,34 +74,65 @@ def graphify_available() -> bool:
         return False
 
 
-def _cluster(G):
-    """Leiden communities if Graphify provides them, else greedy modularity."""
-    try:
-        from graphify.cluster import cluster as gcluster  # type: ignore
-        import networkx as _nx
-        H = _nx.Graph()
-        H.add_nodes_from(G.nodes())
-        H.add_edges_from(G.edges())
-        H.add_edges_from(G.edges())
-        result = gcluster(H)
-        if result:
-            return {n: cid for cid, nodes in result.items() for n in nodes}
-    except Exception as exc:  # noqa: BLE001
-        log.debug("graphify cluster unavailable (%s), using networkx fallback", exc)
+# Which clustering implementation _cluster() used last. Health reports this,
+# so the docs cannot claim Leiden while the code is quietly doing something
+# weaker. See _cluster() for the order.
+CLUSTER_BACKEND = "unknown"
 
+
+def _cluster(G):
+    """Community detection, best available first.
+
+    Order matters, and it is: Leiden > Louvain > greedy modularity. The old
+    version of this function tried Louvain and then greedy modularity, while
+    the module docstring promised Leiden -- so with no louvain installed the
+    claim was false and nothing reported it.
+    """
+    global CLUSTER_BACKEND
+
+    nodes = list(G.nodes())
+    if len(nodes) < 2:
+        CLUSTER_BACKEND = "trivial"
+        return {n: 0 for n in nodes}
+
+    # 1. Leiden, if leidenalg is installed. This is the documented behaviour.
+    try:
+        import igraph as ig  # type: ignore
+        import leidenalg  # type: ignore
+
+        edges = [(u, v) for u, v in G.edges() if u != v]
+        graph = ig.Graph(n=len(nodes), edges=list(edges), directed=False)
+        part = leidenalg.find_partition(graph, leidenalg.ModularityVertexPartition)
+        out = {nodes[idx]: int(cid) for idx, cid in enumerate(part.membership)}
+        if out:
+            CLUSTER_BACKEND = "leidenalg"
+            return out
+    except Exception as exc:  # noqa: BLE001
+        log.debug("leidenalg unavailable (%s), trying Louvain", exc)
+
+    # 2. Louvain
     try:
         import community as community_louvain  # type: ignore
+        CLUSTER_BACKEND = "louvain"
         return community_louvain.best_partition(G)
     except Exception:
         pass
 
+    # 3. Greedy modularity. Weaker than Leiden, but it ships with networkx,
+    #    so there is always an answer.
     import networkx.algorithms.community as nxc
+    CLUSTER_BACKEND = "greedy-modularity"
     return {n: i for i, c in enumerate(nxc.greedy_modularity_communities(G))
             for n in c}
 
 
 def _surprising_pairs(G, threshold: float = 0.0) -> list[tuple[str, str]]:
-    """Graphify's surprising_connections when available, else cross-community edges."""
+    """An edge whose endpoints sit in different communities.
+
+    Graphify's surprising_connections is tried first if vendored in, but the
+    answer this actually returns is the cross-community edge set computed
+    here, which is the part that is actually load-bearing.
+    """
     try:
         from graphify.analyze import surprising_connections  # type: ignore
         pairs = set()

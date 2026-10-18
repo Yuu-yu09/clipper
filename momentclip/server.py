@@ -92,7 +92,11 @@ def health() -> dict:
         "ffmpeg": ffmpeg.available(cfg),
         "ffmpeg_version": ffmpeg.version(),
         "transcription": caps,
+        # Report the backends that actually exist, and distinguish "graph library"
+# from "community detection", because they are separate choices and only the
+# second one decides whether the Leiden claim in the README is true.
         "graph_backend": "graphify" if momentgraph.graphify_available() else "networkx",
+        "cluster_backend": _detect_cluster_backend(),
         "libass": ffmpeg.has_libass(cfg),
         "opencv": render._load_cv2() is not False,
         "face_tracking": render.face_tracking_available(),
@@ -275,18 +279,57 @@ def delete_job(job_id: str) -> dict:
 # --------------------------------------------------------------------------
 # artefacts
 # --------------------------------------------------------------------------
+def _detect_cluster_backend() -> str:
+    """Which community-detection implementation would run right now.
+
+    Reported by /api/health so the clustering claim in the README is
+    verifiable at runtime rather than being taken on trust. leidenalg is
+    preferred, then Louvain, then networkx's greedy modularity.
+    """
+    import importlib
+    for mod, name in (("leidenalg", "leidenalg"), ("igraph", "igraph"),
+                      ("community", "louvain")):
+        try:
+            importlib.import_module(mod)
+            return name
+        except ImportError:
+            continue
+    return "greedy-modularity"
+
+
 @app.get("/api/jobs/{job_id}/artifact/{name}")
 def artifact(job_id: str, name: str):
+    """Serve a file produced by a job.
+
+    The pipeline writes its analysis into the job's work/ directory, so
+    graph.json, transcript.json and signals.json physically live at
+    work/<name>. The documented URLs -- and the ones the UI asks for -- are
+    artifact/<name>, without that prefix, because nobody outside this process
+    should have to know the internal layout.
+
+    So: resolve the bare name at the job root first, then fall back to work/.
+    An explicit path like work/transcript.json still works, which keeps the
+    route useful for callers that do want to be specific.
+    """
     base = _guard(job_id)
-    if "/" in name or "\\" in name or ".." in name:
-        # allow one nested level, e.g. work/transcript.json
-        parts = name.split("/")
-        if len(parts) > 2 or any(p in {"..", ""} for p in parts):
+    parts = name.replace("\\", "/").split("/")
+    if len(parts) > 2 or any(p in {"..", ""} for p in parts):
+        raise HTTPException(400, "invalid artifact name")
+
+    root = base.resolve()
+    candidates = [base / name]
+    if len(parts) == 1:
+        candidates.append(base / "work" / name)
+
+    for cand in candidates:
+        path = cand.resolve()
+        # containment check: never serve anything outside the job directory
+        if not str(path).startswith(str(root)):
             raise HTTPException(400, "invalid artifact name")
-    path = (base / name).resolve()
-    if not str(path).startswith(str(base.resolve())) or not path.exists():
-        raise HTTPException(404, "no such artifact")
-    return FileResponse(path)
+        if path.is_file():
+            return FileResponse(path)
+
+    raise HTTPException(404, f"no artifact named {name!r}")
 
 
 @app.get("/api/jobs/{job_id}/clips/{clip_id}.mp4")

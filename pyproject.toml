@@ -25,6 +25,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "numpy>=1.24",
     "networkx>=3.0",
+    "leidenalg>=0.10",
 ]
 
 [project.optional-dependencies]
