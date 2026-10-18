@@ -116,6 +116,66 @@ code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-siz
   background: #2a1512; border: 1px solid #5c2a1f; color: #ff9d84; font-size: 13px;
   white-space: pre-wrap;
 }
+/* ---- prompt (ClipAnything) ---- */
+.promptbox { margin-top: 22px; padding: 16px; border: 1px dashed var(--line);
+  border-radius: 12px; background: #101521; }
+.modelrow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.modelrow > label { font-size: 12px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: 0.06em; }
+.modelrow .segmented { flex: 1; }
+#promptwrap { margin-top: 14px; }
+#customprompt {
+  width: 100%; padding: 11px 14px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--text); font-size: 14px;
+}
+#customprompt:focus { outline: none; border-color: var(--accent); }
+.examples { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.examples button {
+  background: #16203a; border: 1px solid #24304d; color: #9db4e8;
+  padding: 5px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+}
+.examples button:hover { border-color: var(--accent); color: #fff; }
+.promptinfo { margin-top: 10px; font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+.promptinfo .ok { color: var(--good); }
+.promptinfo .warn { color: var(--warn); display: block; margin-top: 4px; }
+.promptinfo .bad { color: #ff9d84; display: block; margin-top: 4px; }
+
+/* ---- caption style cards (mirrors the OpusClip preset picker) ---- */
+.opt.wide { grid-column: 1 / -1; }
+.presetgrid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+}
+.pcard {
+  background: #1c1c1c; border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden; cursor: pointer; text-align: center; padding: 0;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.pcard:hover { transform: translateY(-2px); border-color: #4a4a4a; }
+.pcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pcard .thumb {
+  aspect-ratio: 16/10; display: flex; align-items: flex-end; justify-content: center;
+  padding: 0 6px 10px; background: linear-gradient(160deg,#2b2b2b,#141414);
+  font-weight: 800; font-size: 15px; letter-spacing: -0.01em; line-height: 1.12;
+  text-align: center; white-space: pre-line; overflow: hidden;
+}
+.pcard .plabel { font-size: 11.5px; color: var(--dim); padding: 7px 4px; }
+.pcard.on .plabel { color: var(--text); }
+.capfoot { margin-top: 10px; }
+#capmeta { font-size: 12px; color: var(--dim); line-height: 1.6; }
+#capmeta b { color: var(--text); }
+#capmeta code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+
+#provnote { margin-top: 7px; font-size: 11.5px; color: var(--dim); line-height: 1.5; }
+#provnote .free { color: var(--good); }
+#provnote .paid { color: var(--warn); }
+select {
+  width: 100%; padding: 9px 12px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+  font-size: 13px;
+}
+select:focus { outline: none; border-color: var(--accent); }
+
 .hidden { display: none !important; }
 
 /* ---- results ---- */

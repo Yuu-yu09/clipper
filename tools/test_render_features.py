@@ -11,7 +11,6 @@ Run:  python tools/test_render_features.py
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -178,7 +177,6 @@ def main() -> int:
     # ---------- zoom actually varies across the clip ----------
     print("\nverifying the zoom is not static …")
     try:
-        import numpy as np
         exe = ffmpeg._discover("ffmpeg")
         if not exe:
             print("  ffmpeg not found; skipping")
@@ -209,6 +207,50 @@ def main() -> int:
             print("  could not sample frames; skipping")
     except Exception as exc:  # noqa: BLE001
         print(f"  zoom probe skipped: {exc}")
+
+    # ---------- reactive zoom ----------
+    print("\nreactive zoom (punch on reactions) …")
+    for label, rea in (("no reactions", []),
+                       ("one punch", [(2.0, 1.0)]),
+                       ("two punches", [(2.0, 1.0), (5.0, 0.6)])):
+        z = render._reactive_zoom_expr(1.03, 1.09, 240, rea, 30.0)
+        has_punch = "pow(" in z
+        print(f"  {label:<14} {'no punch (baseline drift only)' if not has_punch else z[:74] + '…'}")
+        if rea and not has_punch:
+            fails.append(f"reactive zoom {label} has no punch term")
+        if len(z) > 600:
+            fails.append(f"reactive zoom expression too long ({len(z)} chars)")
+
+    # ---------- adaptive music ----------
+    print("\nadaptive music per clip …")
+
+    class _E:
+        def __init__(self, kind, strength=0.8):
+            self.kind, self.strength = kind, strength
+
+    mood_cases = [
+        ("two laughs", {"spectacle": 0.7}, [_E("laughter")] * 2, "funny"),
+        ("quiet flat", {"spectacle": 0.1, "loudness_swing": 3},
+         [_E("silence_beat")], "chill"),
+        ("argument", {"spectacle": 0.6}, [_E("overlap")] * 3, "tense"),
+        ("many shocks", {"spectacle": 0.5}, [_E("energy_shock")] * 4, "upbeat"),
+    ]
+    seen = set()
+    for name, feats, evs, want in mood_cases:
+        got, why = soundtrack.mood_from_clip(feats, evs)
+        seen.add(got)
+        print(f"  {name:<14} -> {got:<8} {'ok' if got == want else 'WANTED ' + want}   ({why})")
+        if got != want:
+            fails.append(f"mood for {name} was {got}, wanted {want}")
+    print(f"  distinct moods from 4 clip profiles: {len(seen)}")
+    if len(seen) < 3:
+        fails.append("adaptive music barely varies between clip profiles")
+
+    r130 = soundtrack.root_from_pitch(130)
+    r180 = soundtrack.root_from_pitch(180)
+    print(f"  pitch->key: 130Hz -> {r130:.2f}Hz, 180Hz -> {r180:.2f}Hz")
+    if abs(r130 - 130.81) > 0.1:
+        fails.append(f"pitch->key snapping wrong: {r130}")
 
     return finish(fails, dest)
 

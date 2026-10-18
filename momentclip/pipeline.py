@@ -13,9 +13,9 @@ from pathlib import Path
 
 import numpy as np
 
-from . import asr, captions, candidates, ffmpeg, momentgraph, rank, render, signals, soundtrack
+from . import (asr, candidates, ffmpeg, momentgraph, prompt, rank,
+               render, signals, soundtrack, vision)
 from .config import Config, get_config, resolve_clip_length
-from .soundtrack import MixSpec
 
 log = logging.getLogger("momentclip.pipeline")
 
@@ -80,6 +80,7 @@ class AnalysisResult:
     # scored the clip in the first place
     event_list: list = field(default_factory=list)
     track: dict = field(default_factory=dict)
+    prompt_info: dict = field(default_factory=dict)
 
 
 def download(url: str, dest_dir: Path, cfg: Config) -> Path:
@@ -118,14 +119,18 @@ def analyse(
     workdir: Path,
     *,
     persona: str = "general",
+    prompt_text: str = "",
     use_llm: bool = True,
     use_graph: bool = True,
+    use_vision: bool | None = None,
     min_clip: float | None = None,
     max_clip: float | None = None,
     cfg: Config | None = None,
     progress=None,
 ) -> tuple[AnalysisResult, list[rank.Ranked]]:
     cfg = cfg or get_config()
+    if use_vision is None:
+        use_vision = cfg.use_vision
     source = Path(source)
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -183,7 +188,26 @@ def analyse(
                 m.features.setdefault("lexical_novelty", 0.5)
 
     step(66, "ranking moments")
-    ranked = rank.rank(moments, persona=persona, cfg=cfg, use_llm=use_llm)
+    # Compile the free-text prompt into a weighting plan. It re-ranks moments
+    # that already exist -- it cannot invent timestamps.
+    plan = prompt.compile_prompt(prompt_text, transcript)
+
+    # Optional vision pass: this is the only way a prompt can match something
+    # that is only SEEN rather than said. Runs before ranking so its output
+    # can feed the prompt matching.
+    vision_result = None
+    if use_vision and plan.active:
+        step(60, "describing frames with a vision model")
+        vision_result = vision.describe(source, 0.0, duration, events,
+                                       cfg, workdir=workdir / "vision")
+        if not vision_result.ok and vision_result.note:
+            log.info("vision pass unavailable: %s", vision_result.note)
+
+    ranked = rank.rank(moments, persona=persona, cfg=cfg, use_llm=use_llm,
+                       prompt_plan=plan)
+    if vision_result is not None:
+        ranked = _apply_vision(ranked, plan, vision_result)
+    ranked = prompt.apply_plan(plan, ranked)
     ranked = rank.select(ranked, cfg.max_clips, cfg)
     ranked.sort(key=lambda r: -r.final_score)
 
@@ -217,6 +241,17 @@ def analyse(
         has_llm=cfg.has_llm,
         event_list=events,
         track=track,
+        prompt_info={
+            "text": plan.raw,
+            "active": plan.active,
+            "describe": plan.describe(),
+            "keywords": plan.keywords,
+            "sentiments": plan.sentiments,
+            "sound_cues": plan.sound_cues,
+            "intent": plan.intent,
+            "notes": plan.notes,
+            "unsupported": plan.unsupported,
+        },
     )
     return result, ranked
 
@@ -250,10 +285,11 @@ def export(
     *,
     aspect: str = "9:16",
     caption_style: str = "pop",
+    persona: str = "general",
     burn_captions: bool = True,
     reframe: bool = True,
     auto_zoom: bool = True,
-    music_mood: str = "upbeat",
+    music_mood: str = "auto",
     music_gain: float = 0.16,
     auto_sfx: bool = True,
     auto_hook: bool = False,
@@ -267,6 +303,9 @@ def export(
     results: list[ClipResult] = []
     total = len(ranked)
     events = events or []
+    notes: list[str] = []
+    music_mood_pref = music_mood or "auto"
+    track = track or {}
 
     for i, r in enumerate(ranked, 1):
         m = r.moment
@@ -279,15 +318,16 @@ def export(
         # --- audio: music bed + comedy SFX placed on this clip's peaks ---
         mix = soundtrack.MixSpec(music_gain=music_gain, duck=True)
         sfx: list[tuple[float, str]] = []
-        if music_mood and music_mood != "none":
-            bed = soundtrack.build_music(m.end - m.start, music_mood, cfg,
-                                         workdir=outdir / "_music")
-            mix.music = bed
-        if auto_sfx and events:
-            inside = [e for e in events if e.start < m.end and e.end > m.start]
-            local = [type("E", (), {"start": e.start - m.start, "end": e.end - m.start,
-                                    "kind": e.kind, "strength": e.strength})()
-                     for e in inside]
+        reactions: list[tuple[float, float]] = []
+        music_mood = ""
+
+        # events inside this clip, rebased to clip-local time
+        inside = [e for e in events if e.start < m.end and e.end > m.start]
+        local = [type("E", (), {"start": e.start - m.start, "end": e.end - m.start,
+                                "kind": e.kind, "strength": e.strength})()
+                 for e in inside]
+
+        if auto_sfx and local:
             sfx = soundtrack.pick_stingers(local, m.end - m.start, limit=2)
             paths = []
             for _off, kind in sfx:
@@ -295,6 +335,32 @@ def export(
                 soundtrack.generate_stinger(kind, sp)
                 paths.append(sp)
             mix.stinger_paths = paths
+
+        # strongest spectacle events drive the zoom punch-ins
+        if auto_zoom and local:
+            reactions = [
+                (e.start, e.strength) for e in
+                sorted((x for x in local
+                        if x.kind in {"laughter", "energy_shock", "pitch_surge"}),
+                       key=lambda x: -x.strength)[:2]
+            ]
+
+        if music_mood_pref and music_mood_pref != "auto":
+            bed = soundtrack.build_music(m.end - m.start, music_mood_pref, cfg,
+                                         workdir=outdir / "_music")
+            mix.music = bed
+            music_mood = music_mood_pref
+        elif music_mood_pref != "none":
+            # derive the bed from this clip's own energy and the speaker's pitch
+            f0 = _median_f0(track, m.start, m.end)
+            bed, music_mood, root_name, why = soundtrack.build_music_adaptive(
+                m.end - m.start, m.features, local, f0, persona, cfg,
+                workdir=outdir / "_music")
+            mix.music = bed
+            if bed:
+                notes.append(f"music: {music_mood} in {root_name} — {why}")
+        else:
+            music_mood = "none"
 
         headline = ""
         if auto_hook and m.text:
@@ -306,7 +372,7 @@ def export(
                 words=m.words, aspect=aspect, caption_style=caption_style,
                 headline=headline,
                 want_captions=burn_captions, want_reframe=reframe,
-                want_zoom=auto_zoom,
+                want_zoom=auto_zoom, reactions=reactions,
                 music=mix if mix.music else None, stingers=sfx if sfx else None,
                 cfg=cfg,
             )
@@ -320,7 +386,8 @@ def export(
                 features={**r.subscores, **{k: v for k, v in m.features.items()
                                            if k.startswith(("graph_", "lexical_"))}},
                 graph_reasons=m.graph_reasons,
-                music=res.music, sfx=res.sfx, zoom=res.zoom,
+                music=res.music or (music_mood if mix.music else None),
+                sfx=res.sfx, zoom=res.zoom,
             ))
         except Exception as exc:  # noqa: BLE001
             log.warning("clip %s render failed: %s", m.id, exc)
@@ -334,6 +401,55 @@ def export(
     if progress:
         progress(100, "done")
     return results
+
+
+def _apply_vision(ranked, plan, vision_result):
+    """Boost moments that overlap a frame matching the prompt's topics."""
+    if not (vision_result and vision_result.ok and plan.keywords):
+        return ranked
+    from .prompt import _clamp
+
+    if not vision.keywords_match(plan, vision_result):
+        return ranked
+
+    hits = 0
+    for r in ranked:
+        best = 0.0
+        for note in vision_result.notes:
+            if not note.description:
+                continue
+            # overlap test against that frame's window
+            if r.moment.end < note.t - 4 or r.moment.start > note.t + 4:
+                continue
+            from .prompt import _STOPWORDS
+            from .vision import _WORD
+            toks = {w.lower() for w in _WORD.findall(note.description)} - _STOPWORDS
+            hit = sum(1 for k in plan.keywords if k in toks) / len(plan.keywords)
+            best = max(best, hit)
+        if best > 0:
+            hits += 1
+            r.subscores["vision_match"] = best
+            r.final_score = _clamp(r.final_score + 0.45 * best)
+            r.reason = f"visually matches “{' '.join(plan.keywords[:3])}”" \
+                       + (f"; {r.reason}" if r.reason else "")
+    if hits:
+        log.info("vision matched %d/%d moments to prompt topics", hits, len(ranked))
+    return ranked
+
+
+def _median_f0(track: dict | None, start: float, end: float) -> float | None:
+    """Median voiced pitch inside a window -- used to key the music."""
+    if not track:
+        return None
+    t = track.get("t")
+    f0 = track.get("f0")
+    if t is None or f0 is None or len(t) == 0:
+        return None
+    lo = int(np.searchsorted(t, start))
+    hi = int(np.searchsorted(t, end))
+    seg = f0[lo:max(hi, lo + 1)]
+    seg = seg[seg > 0]
+    return float(np.median(seg)) if seg.size else None
 
 
 def _hook_line(text: str, max_words: int = 7) -> str:
@@ -351,18 +467,22 @@ def run(
     outdir: Path,
     *,
     persona: str = "general",
+    prompt_text: str = "",
     aspect: str = "9:16",
     caption_style: str = "pop",
     clip_length: str = "auto",
     burn_captions: bool = True,
     reframe: bool = True,
     auto_zoom: bool = True,
-    music: str = "upbeat",
+    music: str = "auto",
     music_gain: float = 0.16,
     auto_sfx: bool = True,
     auto_hook: bool = False,
     use_llm: bool = True,
     use_graph: bool = True,
+    use_vision: bool | None = None,
+    min_clip: float | None = None,
+    max_clip: float | None = None,
     cfg: Config | None = None,
     progress=None,
 ) -> dict:
@@ -374,17 +494,18 @@ def run(
     hi = max(lo, min(cfg.max_clip if clip_length == "auto" else hi, cfg.max_clip))
 
     analysis, ranked = analyse(
-        source, workdir, persona=persona, use_llm=use_llm,
-        use_graph=use_graph, cfg=cfg, progress=progress,
-        min_clip=lo, max_clip=hi,
+        source, workdir, persona=persona, prompt_text=prompt_text,
+        use_llm=use_llm, use_graph=use_graph, use_vision=use_vision,
+        cfg=cfg, progress=progress, min_clip=lo, max_clip=hi,
     )
     clips = export(
         ranked, source, outdir, aspect=aspect, caption_style=caption_style,
         burn_captions=burn_captions, reframe=reframe, auto_zoom=auto_zoom,
-        music_mood=music, music_gain=music_gain, auto_sfx=auto_sfx,
+        music_mood=music, music_gain=music_gain, persona=persona,
+        auto_sfx=auto_sfx,
         auto_hook=auto_hook,
-        track=getattr(analysis, "track", None),
-        events=getattr(analysis, "event_list", None),
+        track=getattr(analysis, "track", None) or {},
+        events=getattr(analysis, "event_list", None) or [],
         cfg=cfg, progress=progress,
     )
     return {
@@ -400,6 +521,7 @@ def run(
             "signals": analysis.signals,
             "has_llm": analysis.has_llm,
             "clip_length": [lo, hi],
+            "prompt": analysis.prompt_info,
         },
         "clips": [c.to_dict() for c in clips],
         "elapsed_seconds": round(time.time() - t0, 2),

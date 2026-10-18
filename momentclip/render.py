@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import captions, ffmpeg, soundtrack
+from . import captions, ffmpeg
 from .asr import Word
 from .config import Config, get_config
 from .soundtrack import MixSpec
@@ -95,15 +95,20 @@ def face_tracking_available() -> bool:
     return _load_cv2() is not False and _cascade_path() is not None
 
 
-def _face_center(src: Path, start: float, end: float,
-                 sample_fps: float = 5.0) -> tuple[float | None, float, str]:
-    """Median horizontal face centre as a fraction of frame width.
+def _face_series(src: Path, start: float, end: float, samples: int = 5,
+                 sample_fps: float = 5.0) -> tuple[list[float], str]:
+    """Face centre sampled across the clip, as fractions of frame width.
 
-    Returns (centre, face_fraction, note). Falls back to the frame centre.
+    Returned in order, so the crop can follow a speaker who moves rather than
+    locking to one averaged position for the whole clip.
     """
     cv2 = _load_cv2()
     if cv2 is False:
-        return None, 0.0, "opencv unavailable, centred crop"
+        return [], "opencv unavailable, centred crop"
+    cascade_file = _cascade_path()
+    if cascade_file is None:
+        return [], ("no face cascade (install opencv-python-headless<5 "
+                    "for speaker tracking), centred crop")
 
     duration = max(0.1, end - start)
     tmpdir = Path(tempfile.mkdtemp(prefix="clipper-faces-"))
@@ -118,19 +123,13 @@ def _face_center(src: Path, start: float, end: float,
 
         frames = sorted(tmpdir.glob("f_*.jpg"))
         if not frames:
-            return None, 0.0, "no frames sampled"
+            return [], "no frames sampled"
 
-        cascade_file = _cascade_path()
-        if cascade_file is None:
-            return None, 0.0, (
-                "no face cascade (OpenCV 5 dropped it -- install "
-                "opencv-python-headless<5 for speaker tracking), centred crop"
-            )
         cascade = cv2.CascadeClassifier(str(cascade_file))
         if cascade.empty():
-            return None, 0.0, "face cascade failed to load"
+            return [], "face cascade failed to load"
 
-        centres: list[tuple[float, float]] = []
+        per_frame: list[float] = []
         for fp in frames:
             img = cv2.imread(str(fp))
             if img is None:
@@ -141,19 +140,53 @@ def _face_center(src: Path, start: float, end: float,
                                              minNeighbors=5, minSize=(48, 48))
             if len(faces):
                 # biggest face == whoever is closest to camera == the speaker
-                x, y, fw, fh = max(faces, key=lambda r: r[2] * r[3])
-                centres.append(((x + fw / 2.0) / w, fw / w))
+                x, _y, fw, fh = max(faces, key=lambda r: r[2] * r[3])
+                per_frame.append((x + fw / 2.0) / w)
 
-        if not centres:
-            return None, 0.0, "no face found, centred crop"
+        if not per_frame:
+            return [], "no face found, centred crop"
 
-        arr = np.asarray(centres, dtype=np.float64)
-        return float(np.median(arr[:, 0])), float(np.median(arr[:, 1])), ""
+        # Haar cascades fire on gradients, rectangles and text as readily as on
+        # faces. A lone detection is noise, so require it to hold up over the
+        # clip before we let it steer the crop.
+        n = len(per_frame)
+        coverage = n / max(1, len(frames))
+        if coverage < 0.25:
+            return [], f"face detected in only {coverage:.0%} of frames, centred crop"
+
+        arr = np.asarray(per_frame, dtype=np.float64)
+        med = float(np.median(arr))
+        # reject a track that jumps around wildly -- that is noise, not a person
+        spread = float(np.std(arr))
+        if spread > 0.18:
+            kept = [v for v in per_frame if abs(v - med) < spread]
+            if kept:
+                per_frame = kept
+            else:
+                return [], "face track too unstable, centred crop"
+
+        # bucket into `samples` sections so the crop can move between speakers
+        out: list[float] = []
+        n = len(per_frame)
+        for i in range(samples):
+            lo = int(i * n / samples)
+            hi = max(lo + 1, int((i + 1) * n / samples))
+            chunk = per_frame[lo:hi]
+            out.append(float(np.median(chunk)) if chunk else 0.5)
+        return out, ""
     except Exception as exc:  # noqa: BLE001
         log.debug("face detection failed: %s", exc)
-        return None, 0.0, f"face detection failed ({type(exc).__name__}), centred crop"
+        return [], f"face detection failed ({type(exc).__name__}), centred crop"
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _face_center(src: Path, start: float, end: float,
+                 sample_fps: float = 5.0) -> tuple[float | None, float, str]:
+    """Median face centre over the whole clip. Compatibility wrapper."""
+    series, note = _face_series(src, start, end, samples=1,
+                                 sample_fps=sample_fps)
+    return (series[0] if series else None), 0.0, note
 
 
 # --------------------------------------------------------------------------
@@ -169,9 +202,51 @@ def _zoom_expr(z_start: float, z_end: float, frames: int) -> str:
     return f"({z_start:.5f}+({z_end - z_start:.5f})*min(1,n/{n}))"
 
 
+def _reactive_zoom_expr(z_start: float, z_end: float, frames: int,
+                        reactions: list[tuple[float, float]],
+                        fps: float) -> str:
+    """Zoom that PUNCHES on reaction moments instead of drifting uniformly.
+
+    A constant push-in reads as a still photo with a slow crop. What makes
+    short-form feel edited is the frame moving *because something happened*:
+    a laugh lands, the camera moves in, then settles back.
+
+    Each reaction contributes a short triangular pulse centred on its peak,
+    raised to a power so the falloff is soft rather than a visible corner.
+
+    Commas inside max()/pow() must be escaped or ffmpeg's filter parser splits
+    the argument list in the wrong place.
+    """
+    base = _zoom_expr(z_start, z_end, frames)
+    if not reactions or fps <= 0:
+        return base
+
+    z = base
+    for t_rel, strength in reactions[:2]:
+        c = int(round(max(0.0, t_rel) * fps))
+        if c <= 0:
+            continue
+        w = max(4, int(0.40 * fps))          # pulse half-width, in frames
+        amp = 0.05 + 0.09 * max(0.0, min(1.0, strength))
+        z += f"+{amp:.4f}*pow(max(0\\,1-abs(n-{c})/{w})\\,1.6)"
+    return z
+
+
+def _pan_expr(cx0: float, cx1: float, frames: int) -> str:
+    """Interpolate the subject's horizontal position across the clip.
+
+    Lets the crop follow a speaker who moves, or cut between two people in a
+    two-shot, instead of averaging them into the middle for the whole clip.
+    """
+    n = max(1, int(frames))
+    return f"({cx0:.4f}+({cx1 - cx0:.4f})*min(1,n/{n}))"
+
+
 def _video_filter(src_w: int, src_h: int, out_w: int, out_h: int,
                   centre_x: float | None, frames: int,
-                  zoom_start: float, zoom_end: float) -> str:
+                  zoom_start: float, zoom_end: float,
+                  reactions: list[tuple[float, float]] | None = None,
+                  fps: float = 30.0) -> str:
     """Cover-crop to the target box, then push in over time.
 
     The zoom is done by cropping an ever-smaller window and scaling it back up,
@@ -185,11 +260,20 @@ def _video_filter(src_w: int, src_h: int, out_w: int, out_h: int,
     target_ar = out_w / out_h
     src_ar = src_w / src_h if src_h else target_ar
 
+    # `centre_x` may be a list (speaker-following samples) or a single float.
+    # Normalise once: every branch below wants a plain number.
+    if isinstance(centre_x, (list, tuple)):
+        cx_static = float(centre_x[len(centre_x) // 2]) if len(centre_x) else 0.5
+    elif centre_x is None:
+        cx_static = None
+    else:
+        cx_static = float(centre_x)
+
     # --- step 1: cover the output box exactly ---
     if src_ar > target_ar:
         cw = max(2, min(src_w, int(round(src_h * target_ar))))
-        x = 0 if centre_x is None else int(round(
-            min(max(0, src_w - cw), max(0.0, centre_x * src_w - cw / 2))))
+        x = 0 if cx_static is None else int(round(
+            min(max(0, src_w - cw), max(0.0, cx_static * src_w - cw / 2))))
         base = f"scale=-2:{out_h},crop={out_w}:{out_h}:{x}:0"
     else:
         ch = max(2, min(src_h, int(round(src_w / target_ar))))
@@ -200,7 +284,7 @@ def _video_filter(src_w: int, src_h: int, out_w: int, out_h: int,
         return base + ",setsar=1"
 
     # --- step 2: animated zoom crop out of the covered frame ---
-    z = _zoom_expr(zoom_start, zoom_end, frames)
+    z = _reactive_zoom_expr(zoom_start, zoom_end, frames, reactions or [], fps)
     # z is >= 1.02 by construction, so the denominator is never zero and the
     # window always fits inside the covered frame
     crop_w = f"{out_w}/{z}"
@@ -211,8 +295,11 @@ def _video_filter(src_w: int, src_h: int, out_w: int, out_h: int,
     if centre_x is None:
         x_expr = f"{slack_x}/2"
     else:
-        # bias the window toward the speaker, then clamp inside the frame
-        x_expr = f"clip({centre_x:.4f}*{out_w}-{crop_w}/2\\,0\\,{slack_x})"
+        # follow the subject, then clamp inside the frame
+        cx = _pan_expr(centre_x[0], centre_x[-1], frames) \
+            if isinstance(centre_x, (list, tuple)) and len(centre_x) >= 2 \
+            else f"{float(centre_x):.4f}"
+        x_expr = f"clip({cx}*{out_w}-{crop_w}/2\\,0\\,{slack_x})"
     y_expr = f"{slack_y}/2"
 
     return (f"{base},"
@@ -237,7 +324,6 @@ def _audio_graph(mix: MixSpec | None, stingers: list[tuple[float, str]],
     filters: list[str] = []
 
     bg_label = "[0:a]"
-    chain: list[str] = []
 
     if mix.music:
         inputs += ["-i", str(mix.music)]
@@ -249,8 +335,8 @@ def _audio_graph(mix: MixSpec | None, stingers: list[tuple[float, str]],
         )
         if mix.duck:
             filters.append(
-                f"[mus][0:a]sidechaincompress=threshold=0.035:ratio=9:"
-                f"attack=15:release=350[duck]"
+                "[mus][0:a]sidechaincompress=threshold=0.035:ratio=9:"
+                "attack=15:release=350[duck]"
             )
             bg_label = "[duck]"
             notes.append("music ducked under speech")
@@ -309,6 +395,7 @@ def render_clip(
     want_captions: bool | None = None,
     want_reframe: bool | None = None,
     want_zoom: bool | None = None,
+    reactions: list[tuple[float, float]] | None = None,
     music: MixSpec | None = None,
     stingers: list[tuple[float, str]] | None = None,
     cfg: Config | None = None,
@@ -332,27 +419,35 @@ def render_clip(
     duration = max(0.2, end - start)
 
     # ---- subject detection ------------------------------------------
-    centre_x, face_frac = None, 0.0
+    face_series: list[float] = []
+    centre_x = None
     reframed = False
     need_crop = (out_w / out_h) != info.aspect
+    face_found = False
     if need_crop and (want_reframe or want_zoom):
-        centre_x, face_frac, note = _face_center(src, start, end)
+        face_series, note = _face_series(src, start, end, samples=5)
         if note:
             notes.append(note)
+        face_found = bool(face_series)
+        if face_found:
+            centre_x = face_series      # list -> pan; float -> fixed
         reframed = True
 
-    # a face gets a stronger push-in: it is the subject, so we move in on it
+    fps = info.fps if info.fps and info.fps > 1 else 30.0
+
+    # a face gets a stronger baseline push-in: it is the subject, so move in
     if want_zoom:
-        if face_frac > 0:
-            z0, z1 = 1.04, 1.14
+        if face_found:
+            z0, z1 = 1.03, 1.09
         else:
-            z0, z1 = 1.02, 1.07
+            z0, z1 = 1.01, 1.05
     else:
         z0 = z1 = 1.0
 
-    frames = max(1, int(round(duration * (info.fps or 30.0))))
+    frames = max(1, int(round(duration * fps)))
     vf = _video_filter(info.width, info.height, out_w, out_h,
-                       centre_x, frames, z0, z1)
+                       centre_x, frames, z0, z1,
+                       reactions=reactions, fps=fps)
 
     # ---- captions -----------------------------------------------------
     burned = False
@@ -429,11 +524,14 @@ def render_clip(
     if not dest.exists() or dest.stat().st_size == 0:
         raise RuntimeError("render produced an empty file")
 
-    log.info("rendered %s (%.1fs, %s, zoom %.2f->%.2f, encoder=%s)",
-             dest.name, duration, aspect, z0, z1, encoder)
+    log.info("rendered %s (%.1fs, %s, zoom %.2f->%.2f, reactions=%d, encoder=%s)",
+             dest.name, duration, aspect, z0, z1, len(reactions or []), encoder)
     return RenderResult(
         path=dest, width=out_w, height=out_h, duration=duration,
         burned_captions=burned, reframed=reframed, encoder=encoder, notes=notes,
         music=music.music.name if (music and music.music) else None,
-        sfx=[k for _t, k in stingers], zoom=round(z1, 3),
+        sfx=[k for _t, k in stingers],
+        # report the peak the viewer actually sees, not just the baseline drift
+        zoom=round(z1 + sum(0.05 + 0.09 * max(0.0, min(1.0, s))
+                            for _t, s in (reactions or [])[:2]), 3),
     )

@@ -31,3 +31,8 @@ networkx>=3.0
 
 # --- read the docs PDF offline (nice-to-have, not required) ---
 # pypdf>=4.0
+# --- dev ---
+# pyflakes            # undefined-name + unused-import lint. Worth keeping: it
+#                      # caught an UnboundLocalError that would have crashed
+#                      # every upload, which the slow e2e test only surfaced
+#                      # one failure at a time.

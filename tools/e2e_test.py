@@ -11,7 +11,6 @@ graph, ranking, render, captions -- and asserts the hard guarantees:
 
 from __future__ import annotations
 
-import json
 import shutil
 import sys
 import time
@@ -99,7 +98,6 @@ def main() -> int:
         if not info.has_video or not info.duration:
             fails.append(f"{c['id']} output is not playable video")
             continue
-        want_w, want_h = ffmpeg.probe(src).width, None
         ratio = info.width / info.height
         target = 1080 / 1920
         if abs(ratio - target) > 0.02:
@@ -107,7 +105,7 @@ def main() -> int:
         rendered += 1
 
     print(f"  clips rendered      {rendered}/{len(clips)}")
-    print(f"  watermark          none added (guaranteed by render.py)")
+    print("  watermark          none added (guaranteed by render.py)")
 
     if result.get("watermark") is not False:
         fails.append("result does not assert watermark=False")

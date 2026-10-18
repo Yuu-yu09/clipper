@@ -43,6 +43,21 @@
       <p class="hint">Requires <code>yt-dlp</code> on PATH.</p>
     </div>
 
+    <div class="promptbox">
+      <div class="modelrow">
+        <label>Clip model</label>
+        <div class="segmented" id="model">
+          <button data-v="basic" class="on">Standard</button>
+          <button data-v="anything">🧠 Anything (prompt)</button>
+        </div>
+      </div>
+      <div id="promptwrap" class="hidden">
+        <input type="text" id="customprompt" placeholder="Find the funniest moments…  e.g. &quot;where they argue&quot;, &quot;the most quotable lines&quot;" />
+        <div id="promptchips" class="examples"></div>
+        <div id="promptinfo" class="promptinfo"></div>
+      </div>
+    </div>
+
     <div class="options">
       <div class="opt">
         <label>What are we hunting for?</label>
@@ -71,22 +86,21 @@
           <button data-v="16:9">16:9</button>
         </div>
       </div>
-      <div class="opt">
+      <div class="opt wide">
         <label>Caption style</label>
-        <div class="segmented" id="cstyle">
-          <button data-v="hormozi">🟡 Hormozi</button>
-          <button data-v="pop" class="on">Pop</button>
-          <button data-v="gradient">Gradient</button>
-          <button data-v="boxed">Boxed</button>
-          <button data-v="clean">Clean</button>
-          <button data-v="podcast">Podcast</button>
-          <button data-v="none">Off</button>
+        <div class="presetgrid" id="cstyle">
+          <!-- cards are built from /api/health caption_detail, so the preview
+               and the renderer read the same numbers -->
+        </div>
+        <div class="capfoot">
+          <span class="hint" id="capmeta"></span>
         </div>
       </div>
       <div class="opt">
-        <label>Background music <em id="musicnote"></em></label>
+        <label>Background music <em id="musicnote">· per-clip</em></label>
         <div class="segmented" id="mood">
-          <button data-v="upbeat" class="on">Upbeat</button>
+          <button data-v="auto" class="on">Auto (match vibe)</button>
+          <button data-v="upbeat">Upbeat</button>
           <button data-v="funny">Funny</button>
           <button data-v="chill">Chill</button>
           <button data-v="documentary">Docu</button>
@@ -96,11 +110,17 @@
       </div>
       <div class="opt switches">
         <label class="sw"><input type="checkbox" id="reframe" checked /><span>Auto-reframe to speaker</span></label>
-        <label class="sw"><input type="checkbox" id="autozoom" checked /><span>Auto-zoom / Ken Burns</span></label>
+        <label class="sw"><input type="checkbox" id="autozoom" checked /><span>Auto-zoom — punches in on reactions</span></label>
         <label class="sw"><input type="checkbox" id="sfx" checked /><span>Auto SFX on big moments</span></label>
         <label class="sw"><input type="checkbox" id="hook" /><span>Add hook headline <em>off by default</em></span></label>
         <label class="sw"><input type="checkbox" id="usegraph" checked /><span>Moment graph</span></label>
-        <label class="sw"><input type="checkbox" id="usellm" checked /><span>LLM judge <em id="llmnote"></em></span></label>
+        <label class="sw"><input type="checkbox" id="usellm" checked /><span>AI judge <em id="llmnote"></em></span></label>
+        <label class="sw"><input type="checkbox" id="usevision" checked /><span>Vision pass <em id="visionnote">· for visual prompts</em></span></label>
+      </div>
+      <div class="opt">
+        <label>AI provider</label>
+        <select id="provider"></select>
+        <div id="provnote" class="provnote"></div>
       </div>
     </div>
 

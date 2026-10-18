@@ -6,22 +6,34 @@ __pycache__/
 venv/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+*.log
 
-# runtime data -- job scratch space, sources, rendered clips
+# runtime data -- job scratch space, sources, rendered clips, generated
+# music beds, vision frames, caption previews
 data/
+fixtures/
 *.mp4
 *.mkv
 *.webm
 *.mov
+*.avi
 *.wav
+*.mp3
 *.ass
 *.srt
 
 # env
 .env
+.env.local
 
 # editors / os
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# pytest / coverage
+.coverage
+htmlcov/

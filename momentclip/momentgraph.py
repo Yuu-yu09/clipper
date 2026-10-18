@@ -27,7 +27,7 @@ import logging
 import re
 from collections import Counter, defaultdict
 
-from .candidates import Moment, _keywords
+from .candidates import Moment
 
 log = logging.getLogger("momentclip.momentgraph")
 
@@ -60,7 +60,7 @@ def _content_terms(text: str, limit: int = 12) -> list[str]:
 
 def graphify_available() -> bool:
     try:
-        import graphify  # noqa: F401
+        import graphify  # noqa: F401  (presence is the check)
         return True
     except ImportError:
         return False
@@ -166,7 +166,6 @@ def build(moments: list[Moment], graph_of_history: "object | None" = None):
 
 def annotate(moments: list[Moment], G, top_n: int = 10) -> None:
     """Compute structural features and write them onto each Moment."""
-    by_id = {m.id: m for m in moments}
     degree = dict(G.degree())
     clusters = _cluster(G)
     surprising = set(_surprising_pairs(G))
@@ -251,9 +250,9 @@ def communities(moments: list[Moment], G) -> dict[int, list[str]]:
 def summarise(moments: list[Moment], G) -> dict:
     """A small graph report, in the spirit of GRAPH_REPORT.md."""
     degree = dict(G.degree())
+    by_id = {m.id: m for m in moments}
     moment_nodes = [n for n, d in G.nodes(data=True) if d.get("kind") == "moment"]
     top = sorted(moment_nodes, key=lambda n: -degree.get(n, 0))[:10]
-    by_id = {m.id: m for m in moments}
     clusters = _cluster(G)
     sizes = Counter(clusters.values())
 

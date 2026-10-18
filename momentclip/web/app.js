@@ -43,8 +43,161 @@
   wire("#persona", () => {});
   wire("#clen", () => {});
   wire("#aspect", () => {});
-  wire("#cstyle", () => {});
-  wire("#mood", () => {});
+    wire("#mood", () => {});
+  wire("#model", () => {
+    const m = pick("#model");
+    $("#promptwrap").classList.toggle("hidden", m !== "anything");
+    $("#persona").style.opacity = m === "anything" ? 0.45 : 1;
+  });
+
+  function showProv() {
+    const list = CAPS_PROV || [];
+    const p = list.find((x) => x.key === $("#provider").value);
+    const n = $("#provnote");
+    if (!p) { n.innerHTML = ""; return; }
+    const free = p.free
+      ? `<span class="free">${esc(p.free)}</span>`
+      : `<span class="paid">costs money per token</span>`;
+    const local = p.local_models?.length
+      ? `<br>models pulled: <code>${esc(p.local_models.join(", "))}</code>` : "";
+    const vision = p.vision ? " · reads images" : "";
+    n.innerHTML = `${free}${local}<br>${esc(p.note || "")} · ${esc(p.status)}${vision}`;
+  }
+  let CAPS_PROV = [];
+
+  // ---------- caption style cards ----------
+  // Thumbnail is drawn from the SAME parameters the .ass file is built from,
+  // so a card that looks right here looks right in the render. Hover plays a
+  // real burned sample from the server; the card itself is instant.
+  let CAPS = [];
+  let CAPS_PROV = [];
+  let chosenStyle = "pop";
+
+  function pick(sel) {
+    const on = $(`${sel} button.on`);
+    return on ? on.dataset.v : null;
+  }
+
+  function cssText(p) {
+    const weight = p.bold ? 900 : 500;
+    const stroke = p.outline_w
+      ? `-webkit-text-stroke:${Math.max(1, p.outline_w * 0.5)}px ${p.outline_css}` : "";
+    const fam = p.font.includes("Black") ? "900 15px Arial Black, Impact, sans-serif"
+            : p.font.includes("Impact") ? "800 15px Impact, Haettenschweiler, sans-serif"
+            : p.font.includes("Montserrat") ? "700 15px Montserrat, Segoe UI, sans-serif"
+            : `600 15px ${p.font}, Segoe UI, sans-serif`;
+    return `${fam}; color:${p.primary_css}; ${stroke};`
+         + ` text-shadow:${p.shadow ? "0 2px 4px #000" : "none"};`
+         + ` transform:scale(${p.pop_scale / 100});`;
+  }
+
+  function buildPresetCards() {
+    const grid = $("#cstyle");
+    grid.innerHTML = "";
+    const names = CAPS.map((c) => c.name);
+    (names.includes(chosenStyle) ? names : [...names]).forEach((name) => {
+      const p = CAPS.find((c) => c.name === name);
+      const card = el("button", "pcard" + (name === chosenStyle ? " on" : ""));
+      card.dataset.v = name;
+      card.type = "button";
+      const sample = p.uppercase ? "TO GET\nSTARTED" : "to get\nstarted";
+      const thumb = el("div", "thumb");
+      thumb.innerHTML = `<span style="${cssText(p)}">${esc(sample)}</span>`;
+      card.appendChild(thumb);
+      card.appendChild(el("div", "plabel", esc(name)));
+      card.addEventListener("click", () => {
+        chosenStyle = name;
+        $$("#cstyle .pcard").forEach((c) => c.classList.toggle("on", c.dataset.v === name));
+        showCapMeta(name);
+      });
+      card.addEventListener("mouseenter", () => previewOn(name));
+      grid.appendChild(card);
+    });
+
+    // "no caption" stays a plain tile so it can sit in the same grid
+    const off = el("button", "pcard" + (chosenStyle === "none" ? " on" : ""));
+    off.dataset.v = "none";
+    off.type = "button";
+    off.innerHTML =
+      `<div class="thumb" style="color:#777;font-size:26px">⊘</div>` +
+      `<div class="plabel">No caption</div>`;
+    off.addEventListener("click", () => {
+      chosenStyle = "none";
+      $$("#cstyle .pcard").forEach((c) => c.classList.toggle("on", c.dataset.v === "none"));
+      showCapMeta("none");
+    });
+    grid.appendChild(off);
+    showCapMeta(chosenStyle);
+  }
+
+  let prevBox = null;
+  function previewOn(name) {
+    if (prevBox) prevBox.remove();
+    prevBox = el("div", "");
+    prevBox.style.cssText =
+      "position:fixed;z-index:99;pointer-events:none;box-shadow:0 12px 40px #000a;border-radius:12px;overflow:hidden";
+    const v = document.createElement("video");
+    v.src = `/api/preview/caption.mp4?style=${encodeURIComponent(name)}`;
+    v.muted = true; v.loop = true; v.playsInline = true;
+    v.style.cssText = "width:220px;display:block";
+    prevBox.appendChild(v);
+    document.body.appendChild(prevBox);
+    const move = (e) => {
+      prevBox.style.left = Math.min(window.innerWidth - 240, e.clientX + 16) + "px";
+      prevBox.style.top = Math.min(window.innerHeight - 420, e.clientY + 12) + "px";
+    };
+    prevBox.addEventListener("mousemove", move);
+    v.play().catch(() => {});
+  }
+  window.addEventListener("scroll", () => prevBox && prevBox.remove(), { passive: true });
+
+  function showCapMeta(name) {
+    const meta = $("#capmeta");
+    if (name === "none") {
+      meta.innerHTML = `<b>No caption.</b> The clip is rendered with nothing burned in.`;
+      return;
+    }
+    const p = CAPS.find((c) => c.name === name);
+    if (!p) { meta.innerHTML = ""; return; }
+    meta.innerHTML =
+      `<b>${esc(p.name)}</b> — ${esc(p.font)} ${p.size}px` +
+      `${p.uppercase ? " · UPPERCASE" : ""} · ${p.max_words} words/line<br>` +
+      `rest <span style="color:${p.primary_css}">■</span> ` +
+      `active <span style="color:${p.active_css}">■</span> ` +
+      `outline ${p.outline_w}px · pop to ${p.pop_scale}%<br>` +
+      `word-by-word: <code>\\k</code> karaoke timing + <code>\\t</code> scale pop. ` +
+      `Hover a card to play a real burned sample.`;
+  }
+
+  // ---------- prompt (ClipAnything) ----------
+  let pTimer = null;
+  function onPromptInput() {
+    clearTimeout(pTimer);
+    pTimer = setTimeout(compilePrompt, 350);
+  }
+  async function compilePrompt() {
+    const text = $("#customprompt").value.trim();
+    const box = $("#promptinfo");
+    if (!text) { box.innerHTML = ""; return; }
+    try {
+      const r = await (await fetch("/api/preview/prompt?text=" +
+        encodeURIComponent(text))).json();
+      const bits = [];
+      if (r.keywords?.length) bits.push(`topics <span class="ok">${esc(r.keywords.join(", "))}</span>`);
+      if (r.sentiments?.length) bits.push(`mood <span class="ok">${esc(r.sentiments.join(", "))}</span>`);
+      if (r.sound_cues?.length) bits.push(`sound <span class="ok">${esc(r.sound_cues.join(", "))}</span>`);
+      bits.push(`intent <span class="ok">${esc(r.intent)}</span>`);
+      let html = "Understood → " + bits.join(" · ");
+      if (!r.active) {
+        html += `<span class="warn">Nothing specific to match on — this will rank like the default.</span>`;
+      }
+      (r.notes || []).forEach((n) => { html += `<span class="warn">${esc(n)}</span>`; });
+      (r.unsupported || []).forEach((n) => { html += `<span class="bad">Not supported: ${esc(n)}</span>`; });
+      box.innerHTML = html;
+    } catch (e) {
+      box.innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+    }
+  }
 
   // -------------------------------------------------------------- drop
   const drop = $("#drop");
@@ -102,11 +255,46 @@
       }
       $("#usellm").disabled = !c.llm_configured;
       $("#llmnote").textContent = c.llm_configured ? "" : "(not configured — heuristic only)";
-      if (c.user_music?.length) {
-        $("#musicnote").textContent = `· ${c.user_music.length} of your tracks found`;
-      } else {
-        $("#musicnote").textContent = "· synthesised";
+      // provider picker
+      const sel = $("#provider");
+      sel.innerHTML = "";
+      (c.providers || []).forEach((p) => {
+        const o = document.createElement("option");
+        const freeTag = p.free ? " · free" : " · PAID";
+        o.value = p.key;
+        o.textContent = `${p.label}${freeTag} — ${p.status}`;
+        sel.appendChild(o);
+      });
+      const ready = (c.providers || []).filter((p) => p.status === "ready");
+      if (ready.length) sel.value = ready[0].key;
+      showProv();
+      sel.addEventListener("change", showProv);
+      const vis = c.vision_available;
+      $("#usevision").disabled = !vis;
+      if (!vis) {
+        $("#usevision").checked = false;
+        $("#visionnote").textContent =
+          "(needs a vision model — Gemini/OpenRouter free tier, or Ollama with a VL model)";
       }
+      CAPS = c.caption_detail || [];
+      CAPS_PROV = c.providers || [];
+      buildPresetCards();
+      if (c.user_music?.length) {
+        $("#musicnote").textContent = `· ${c.user_music.length} of your tracks`;
+      } else {
+        $("#musicnote").textContent = "· synthesised, per clip";
+      }
+      // prompt examples
+      const ex = $("#promptchips");
+      (c.prompt_examples || []).forEach((p) => {
+        const b = el("button", "", esc(p));
+        b.addEventListener("click", () => {
+          $("#customprompt").value = p;
+          compilePrompt();
+        });
+        ex.appendChild(b);
+      });
+      $("#customprompt").addEventListener("input", onPromptInput);
     } catch (e) {
       $("#caps").innerHTML = `<span class="cap off">✕ server unreachable</span>`;
     }
@@ -128,10 +316,11 @@
     if (file) fd.append("file", file);
     if (url) fd.append("url", url);
     fd.append("persona", pick("#persona"));
+    fd.append("custom_prompt", $("#customprompt").value.trim());
     fd.append("clip_length", pick("#clen"));
     fd.append("aspect", pick("#aspect"));
     fd.append("music", pick("#mood"));
-    const cs = pick("#cstyle");
+    const cs = chosenStyle;
     fd.append("caption_style", cs === "none" ? "clean" : cs);
     fd.append("captions_on", String(cs !== "none"));
     fd.append("reframe", String($("#reframe").checked));
@@ -140,6 +329,9 @@
     fd.append("auto_hook", String($("#hook").checked));
     fd.append("use_graph", String($("#usegraph").checked));
     fd.append("use_llm", String($("#usellm").checked));
+    fd.append("use_vision", String($("#usevision").checked));
+    const pv = $("#provider").value;
+    if (pv) fd.append("llm_provider", pv);
 
     $("#go").disabled = true;
     $("#progress").classList.remove("hidden");
@@ -238,6 +430,9 @@
       ...(c.features?.centrality > 0.6 ? ["<span class='chip'>recurring bit</span>"] : []),
       ...(c.features?.hook > 0.3 ? ["<span class='chip'>strong hook</span>"] : []),
       ...(c.features?.llm != null ? [`<span class='chip'>LLM ${(c.features.llm * 10).toFixed(0)}/10</span>`] : []),
+      ...(c.music ? [`<span class='chip'>🎵 ${esc(c.music)}</span>`] : []),
+      ...(c.sfx?.length ? [`<span class='chip'>${c.sfx.length}× SFX</span>`] : []),
+      ...(c.zoom > 1.05 ? [`<span class='chip'>zoom ${c.zoom}</span>`] : []),
     ].join("");
     const notes = (c.render_notes || []).filter((n) => !/libass/.test(n));
 

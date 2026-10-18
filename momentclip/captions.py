@@ -17,7 +17,7 @@ words and nothing else is overlaid on the frame.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .asr import Word
@@ -131,6 +131,49 @@ PRESETS: dict[str, Preset] = {
 
 def available_presets() -> list[str]:
     return list(PRESETS)
+
+
+def describe_presets() -> list[dict]:
+    """Serialisable preset parameters, so the UI preview matches the renderer.
+
+    The browser preview is an approximation, but it reads the same numbers the
+    ASS file is built from -- so if the preview looks wrong, the render is
+    wrong too, rather than the preview being decorative.
+    """
+    out = []
+    for name, p in PRESETS.items():
+        out.append({
+            "name": p.name,
+            "font": p.font,
+            "size": p.size,
+            # ASS is &HAABBGGRR; convert to CSS #RRGGBB
+            "primary_css": _ass_to_css(p.primary),
+            "active_css": _ass_to_css(p.active),
+            "outline_css": _ass_to_css(p.outline),
+            "outline_w": p.outline_w,
+            "shadow": p.shadow,
+            "bold": bool(p.bold),
+            "uppercase": p.uppercase,
+            "pop_scale": p.pop_scale,
+            "pop_ms": p.pop_ms,
+            "max_words": p.max_words,
+            "max_chars": p.max_chars,
+            "margin_v": p.margin_v,
+            "border_style": p.border_style,
+        })
+    return out
+
+
+def _ass_to_css(colour: str) -> str:
+    """&HAABBGGRR -> #RRGGBB. Alpha is ignored; the browser draws its own."""
+    try:
+        v = int(colour.replace("&H", "").replace("&h", ""), 16)
+    except ValueError:
+        return "#ffffff"
+    b = (v >> 16) & 0xFF
+    g = (v >> 8) & 0xFF
+    r = v & 0xFF
+    return f"#{r:02X}{g:02X}{b:02X}"
 
 
 def get_preset(name: str) -> Preset:

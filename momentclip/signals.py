@@ -66,7 +66,6 @@ def _frame_features(frame: np.ndarray, sr: int) -> dict[str, float]:
     win = np.hanning(n).astype(np.float64)
     spec = np.abs(np.fft.rfft(frame.astype(np.float64) * win)) + 1e-10
     freqs = np.fft.rfftfreq(n, d=1.0 / sr)
-    power = spec ** 2
 
     centroid = float(np.sum(freqs * spec) / (np.sum(spec) + 1e-10))
     # geometric mean / arithmetic mean -> 1.0 for noise, low for tonal

@@ -245,7 +245,7 @@ def capability() -> dict:
     cfg = get_config()
     caps = {"faster_whisper": False, "http": False, "llm": cfg.has_llm}
     try:
-        import faster_whisper  # noqa: F401
+        import faster_whisper  # noqa: F401  (presence is the check)
         caps["faster_whisper"] = True
     except ImportError:
         pass

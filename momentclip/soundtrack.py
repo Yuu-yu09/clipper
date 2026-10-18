@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
-import struct
+import re
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,7 +127,6 @@ def _chord(freqs: list[float], n: int, brightness: float) -> np.ndarray:
 
 def _stinger(kind: str, n: int) -> np.ndarray:
     """A short comic hit."""
-    rng = np.random.default_rng(23)
     t = np.arange(n) / SR
     if kind == "brass":
         # rising fifth stab
@@ -341,6 +340,112 @@ def hashlib8(s: str) -> int:
     for ch in s:
         h = (h * 31 + ord(ch)) & 0xFFFFFFFF
     return h
+
+
+# --------------------------------------------------------------------------
+# per-clip adaptation
+# --------------------------------------------------------------------------
+# Equal temperament, A4 = 440. Used to put the music in the same key as the
+# speaker's own pitch, which is the difference between a bed that sits under
+# a voice and one that fights it.
+_A4 = 440.0
+_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def root_from_pitch(f0_hz: float | None) -> float:
+    """Snap a detected fundamental to the nearest equal-tempered root."""
+    if not f0_hz or f0_hz <= 40 or f0_hz > 500:
+        return 261.63                      # C4, the default
+    semis = 12 * math.log2(f0_hz / _A4)
+    midi = int(round(69 + semis))
+    midi = max(36, min(84, midi))
+    return _A4 * (2 ** ((midi - 69) / 12.0))
+
+
+def mood_from_clip(features: dict, events: list | None = None,
+                   persona: str = "general") -> tuple[str, str]:
+    """Pick a music mood from the clip's own measured character.
+
+    Without this every clip gets the same bed, which is the "music that
+    doesn't match" problem: a calm explanation and a heated argument end up
+    scored identically.
+
+    Returns (mood, reason).
+    """
+    f = features or {}
+    ev = events or []
+    kinds = [getattr(e, "kind", "") for e in ev]
+
+    n_laugh = kinds.count("laughter")
+    n_shock = kinds.count("energy_shock")
+    n_surge = kinds.count("pitch_surge")
+    n_overlap = kinds.count("overlap")
+    n_silence = kinds.count("silence_beat")
+
+    spectacle = float(f.get("spectacle", 0.0) or 0.0)
+    swing = float(f.get("loudness_swing", 0.0) or 0.0)
+    surprise = float(f.get("graph_surprise", 0.0) or 0.0)
+    centrality = float(f.get("graph_centrality", 0.0) or 0.0)
+
+    if n_laugh >= 2 or (n_laugh >= 1 and spectacle > 0.4):
+        return "funny", f"{n_laugh} laughter burst(s) — bouncy bed"
+    if n_overlap >= 2:
+        return "tense", f"{n_overlap} overlapping-voice moments — driving bed"
+    if n_shock >= 3 or (n_shock >= 1 and spectacle > 0.6):
+        return "upbeat", "high energy and sudden reactions"
+    if n_surge >= 2:
+        return "upbeat", "repeated pitch surges"
+    if surprise > 0.5:
+        return "tense", "surprising / bridging moments"
+    if swing < 6.0 and n_silence >= 1 and centrality < 0.5:
+        return "chill", "flat delivery with pauses — calm bed"
+    if persona == "candid":
+        return "chill", "understated clips suit a soft bed"
+    if n_shock or spectacle > 0.3:
+        return "upbeat", "some energy in this clip"
+    return "chill", "even delivery, nothing spiking — calm bed"
+
+
+def build_music_adaptive(
+    duration: float,
+    features: dict | None = None,
+    events: list | None = None,
+    f0_hz: float | None = None,
+    persona: str = "general",
+    cfg: Config | None = None,
+    workdir: Path | None = None,
+) -> tuple[Path | None, str, str, str]:
+    """Build a bed matched to this specific clip.
+
+    Returns (path, mood, root_name, reason).
+    """
+    cfg = cfg or get_config()
+    mood, reason = mood_from_clip(features or {}, events or [], persona)
+    root = root_from_pitch(f0_hz)
+    root_name = _NOTE_NAMES[int(round(12 * math.log2(root / _A4))) % 12]
+    # note names like "C#" are fine in a filename, but guard the separator
+    root_name = re.sub(r"[^A-Za-z0-9]", "", root_name) or "C"
+
+    workdir = workdir or (cfg.jobs_dir / "_music")
+    dest = workdir / f"bed_{mood}_{root_name}_{int(round(root))}_{int(duration)}s.wav"
+    if dest.exists() and dest.stat().st_size > 1024:
+        return dest, mood, root_name, reason
+
+    mood_spec = MOODS.get(mood, MOODS["upbeat"])
+    tuned = Mood(mood_spec.name, mood_spec.bpm, root, mood_spec.scale,
+                 mood_spec.bass_pattern, mood_spec.drums,
+                 mood_spec.brightness, mood_spec.swing)
+    saved = MOODS.get(mood)
+    MOODS[mood] = tuned
+    try:
+        path = generate_bed(mood, duration, dest)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not synthesise music (%s); continuing without it", exc)
+        path = None
+    finally:
+        if saved is not None:
+            MOODS[mood] = saved
+    return path, mood, root_name, reason
 
 
 def pick_stingers(events, duration: float, limit: int = 2) -> list[tuple[float, str]]:

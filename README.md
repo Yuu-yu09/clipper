@@ -37,18 +37,36 @@ pop as it lands. Six presets, including the karaoke look OpusClip ships as
 
 3–4 words per line, broken on pauses and punctuation — not whole sentences.
 
-**Auto-zoom.** A slow push-in across the clip. Stronger when a face is found
-(`1.04 → 1.14`) than when it isn't (`1.02 → 1.07`), and the crop window stays
-biased toward the speaker. Implemented with `scale` + `crop` and time
-expressions rather than `zoompan`, which has long-standing framerate bugs.
+**Auto-zoom that reacts.** A constant push-in reads as a still photo with a
+slow crop — technically motion, visually dead. What makes short-form feel
+*edited* is the frame moving **because something happened**:
 
-**Music bed.** Synthesised from oscillators — there is no audio file in this
-repo, so nothing to license. Six moods (`upbeat`, `funny`, `chill`,
-`documentary`, `tense`, `none`), each with its own tempo, progression, drum
-pattern and brightness. The bed is **sidechain-compressed against the voice**,
-so it ducks under speech and swells in the gaps with no manual mixing.
+- Baseline drift (`1.03 → 1.09` with a face, `1.01 → 1.05` without)
+- A **punch-in** at each strong reaction — a laugh, an energy shock, a pitch
+  surge — up to `1.18`, easing back down afterwards
+- The crop **follows the speaker**, sampled at 5 points across the clip and
+  interpolated, so it tracks someone who moves or cuts between two people
 
-Drop your own tracks in `assets/music/` and they are used instead.
+All one `crop` expression in the frame number `n` rather than a keyframes file:
+`crop`'s `w`/`h` are evaluated at configure time, where `t` does not exist yet.
+
+**Music that matches the vibe.** One global bed scores every clip identically,
+which is exactly why it feels wrong — a calm explanation and a heated argument
+end up on the same track. Per clip instead:
+
+- **Mood from that clip's own signals** — 2+ laughs → `funny`, 3+ overlaps →
+  `tense`, 4+ energy shocks → `upbeat`, flat delivery with pauses → `chill`
+- **Key from the speaker's own pitch** — the clip's median F0 is snapped to
+  equal temperament and used as the root, so the bed sits *in the key they are
+  speaking in* rather than fighting it
+
+Shown per clip: *"music: funny in C# — 2 laughter burst(s)"*. Still
+synthesised, so no audio asset and nothing to license. The bed is
+sidechain-compressed against the voice, so it ducks under speech and swells in
+the gaps with no manual mixing.
+
+Set music to a fixed mood to override, or drop your own tracks in
+`assets/music/` and they take priority.
 
 **Auto SFX.** Short comedy hits — brass stab, drum roll, pop, slide, womp —
 placed automatically on the *same* detected peaks that scored each clip. At
@@ -62,6 +80,140 @@ open-source equivalent of OpusClip's Auto SFX.
 **Hook headline** (opt-in, off by default — OpusClip also disables it by default
 on API projects): a short hook pulled from the clip's own opening words, faded
 over the first few seconds.
+
+---
+
+## Free-text prompts (the ClipAnything equivalent)
+
+OpusClip's **ClipAnything** takes a natural-language prompt and runs it through
+a cloud multimodal model. Clipper has the same feature with a different
+mechanism, and it works with **no API key at all**.
+
+Switch **Clip model** to *Anything (prompt)* and type what you want:
+
+```
+find the funniest moments
+where they argue
+the most surprising revelations
+audience cheering and applause
+the most quotable lines
+```
+
+The prompt is parsed along the same five axes OpusClip documents:
+
+| Axis | Example | How it's matched |
+|---|---|---|
+| **Subject** | "the jaguar", "Patrick Mahomes" | transcript keywords, boosted by graph centrality |
+| **Sentiment** | "funny", "awkward", "inspiring" | re-weights the signal sub-scores |
+| **Sound** | "cheering", "arguing", "a horn" | re-weights the detected audio event classes |
+| **Action** | "throws a touchdown" | treated as topics; signal events back them up |
+| **Intent** | "compile **all** X" vs "**the** moment where X" | breadth vs single best, and clip count |
+| **Visual** | "the woman in the yellow dress" | **not supported — no vision model** |
+
+The UI shows you **exactly what it understood** before you run anything:
+topics, mood, sound cues, intent, and any part of your prompt it can't honour.
+You should never have to guess whether it parsed you the way you meant.
+
+### Why it can't lie to you
+
+The prompt **re-ranks moments that already exist**. It cannot invent a
+timestamp. `test_prompt.py` asserts this directly: after applying a prompt,
+every returned moment id must be one the pipeline actually found, and every
+start/end must be byte-identical to before. Only scores move.
+
+### What it genuinely can't do
+
+- **Visual understanding.** "Find the jaguar killing the snake" works if they
+  *say* it, not if they only *show* it. There is no vision model.
+- **Clip length via prompt.** Use the Clip length control.
+- **Audio/video editing via prompt.** Captions, music, zoom and aspect are
+  their own controls.
+- **Silent or wordless sources.** Without a transcript, spoken topics can't be
+  matched — the prompt says so rather than pretending.
+
+If you configure an LLM, your **actual prompt text** is passed to the judge
+instead of a fixed persona label, so free-text prompts get a real semantic
+reading on top of the deterministic compile.
+
+---
+
+## Using AI for free
+
+Clipper runs fully without a model — the deterministic path is the default, not
+a fallback. But if you want a model in the loop, these are genuinely free
+options. All of them speak the OpenAI protocol, so it is one code path and
+usually just a base URL.
+
+| Provider | Cost | Card | Vision | Notes |
+|---|---|---|---|---|
+| **Ollama** (local) | unlimited | none | with a vision model | **Default.** Nothing leaves your machine |
+| **Groq** | standing free tier | no | no | fastest hosted; ~30 rpm / 1000 day |
+| **Google AI Studio** | standing free tier | no | **yes** | cheapest way to get vision |
+| **OpenRouter** | `:free` models | no | yes | ~50 req/day until you top up once |
+| OpenAI | **paid** | yes | yes | listed because it works, not because it's free |
+
+New OpenAI accounts get a small **expiring** credit, then it is pay-per-token —
+it is not free. Limits change often; check the provider's dashboard for what is
+actually left today.
+
+### Zero configuration
+
+If a ready provider exists, Clipper finds it. With Ollama running and a model
+pulled, nothing to configure:
+
+```powershell
+ollama serve                       # if not already running
+ollama pull qwen2.5:7b             # or llama3.1:8b, gemma3:12b
+```
+
+`GET /api/health` reports what was found:
+
+```json
+{"providers": [
+  {"key": "ollama", "status": "ready", "free": "unlimited · runs on your machine · private"},
+  {"key": "groq",   "status": "needs GROQ_API_KEY"}
+]}
+```
+
+### Forcing a provider
+
+```powershell
+$env:CLIPPER_LLM_PROVIDER = "groq"
+$env:GROQ_API_KEY = "gsk_..."
+```
+
+Or point at anything OpenAI-compatible:
+
+```powershell
+$env:CLIPPER_LLM_BASE_URL = "http://localhost:11434/v1"
+$env:CLIPPER_LLM_MODEL = "qwen2.5:7b"
+```
+
+### What the model is actually for
+
+It **re-ranks**, it does not find. The heuristic + graph pass locates real
+moments; the model orders them and explains why. A model can never make a clip
+appear at a timestamp that is not in your video — `test_prompt.py` asserts
+this.
+
+If a model is unreachable, the run continues on the deterministic path and
+logs why, rather than failing.
+
+### Vision: matching what is *seen*
+
+This is the one place a model genuinely adds something the signal processing
+cannot do. `momentclip/vision.py` samples frames — evenly, plus densely around
+every detected reaction — asks a multimodal model to describe each one, and
+feeds the descriptions back into prompt matching.
+
+That is what makes *"find the woman in the yellow dress"* work when nobody
+says it. Without a vision provider the prompt compiler says so out loud rather
+than pretending.
+
+```powershell
+pip install requests                     # nothing else needed
+$env:GEMINI_API_KEY = "..."               # or CLIPPER_LLM_PROVIDER=ollama + a vision model
+```
 
 ---
 
@@ -81,15 +233,17 @@ not against screenshots.
 | `enableAutoHook` | `auto_hook` | **off by default here, same as theirs on API** |
 | `range: {startSec, endSec}` | — | not implemented |
 | `genre` | `persona` | funny · candid · surprising · general |
-| `topicKeywords` / `customPrompt` | `ClipAnything`-style prompt | **not implemented** — see below |
+| `topicKeywords` / `customPrompt` | free-text prompts | deterministic compile + optional LLM judge |
 | Virality Score | `rank.py` score | different method, and we show the breakdown |
 | Watermark (lower plans) | **none** | structural guarantee, see `render.py` |
+| — | caption style preview | see `GET /api/preview/caption.mp4` |
 
 **Not implemented**, and honestly so:
 
-- **`ClipAnything` prompt mode.** Their multimodal model takes a natural-language
-  prompt ("compile all the hilarious moments") over any video type. Clipper's
-  persona selector is a fixed rubric, not free-text. This is the biggest gap.
+- **Visual understanding.** ClipAnything reasons over objects, actions and
+  clothing. We have no vision model, so "find the jaguar killing the snake"
+  only works if someone *says* it. The UI tells you when a prompt asks for
+  something we can't honour.
 - **Filler-word removal** (`enableRemoveFillerWords`). Our word-level ASR has
   the data for it; it just isn't wired up.
 - **`range`** — clip only a time window of the source.
@@ -271,7 +425,8 @@ momentclip/
 ├─ render.py       cut, auto-zoom reframe, caption burn, music + SFX mix.
 │                   no watermark. ever.
 ├─ captions.py     6 animated ASS presets, .srt sidecars, headline overlay
-├─ soundtrack.py   synthesised music beds + comedy stingers (no audio assets)
+├─ soundtrack.py   adaptive per-clip music beds + comedy stingers (no audio assets)
+├─ prompt.py       free-text prompt compiler (the ClipAnything equivalent)
 ├─ asr.py          faster-whisper with an HTTP fallback; never raises
 ├─ pipeline.py     the orchestration
 ├─ server.py       FastAPI
@@ -321,6 +476,20 @@ are tuned to keep it at 5/5 — if a tweak breaks the detector, this fails.
 Fixture 3 exists because the tone fixture has **no recognisable speech by
 design**, so whisper correctly reports "no speech" on it. Testing the ASR and
 caption path needs actual words, hence TTS.
+
+---
+
+## Development
+
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the commit workflow and the
+checks to run before pushing. In short:
+
+```powershell
+python -m pyflakes momentclip run.py tools
+python tools\selftest.py && python tools\test_transcript.py
+python tools\test_prompt.py && python tools\test_render_features.py
+python tools\e2e_test.py
+```
 
 ---
 

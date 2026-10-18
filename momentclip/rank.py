@@ -18,9 +18,8 @@ import logging
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from . import asr
 from .candidates import Moment
 from .config import Config, get_config
 
@@ -196,9 +195,20 @@ Signal evidence per clip:
 Clips:
 {clips}
 
-Return ONLY a JSON array of objects, one per clip, in the same order:
-[{{"id": "...", "score": 0-10, "reason": "<= 15 words"}}]
+Return ONLY a JSON object of this exact shape, with one entry per clip:
+{{"clips": [{{"id": "<the clip id>", "score": <0-10>, "reason": "<= 15 words>"}}]}}
+
+Use the `id` given in each clip block. Do not invent ids. Do not add commentary.
 """
+
+
+def _endpoint(cfg: Config) -> tuple[str | None, str | None, str | None]:
+    """Resolve (base_url, api_key, model) across providers and raw config."""
+    try:
+        from . import providers
+        return providers.resolve(cfg.llm_provider, cfg.llm_model, cfg)
+    except Exception:  # noqa: BLE001
+        return cfg.llm_base_url, cfg.llm_api_key, cfg.llm_model
 
 
 def _clip_block(m: Moment) -> str:
@@ -223,12 +233,16 @@ def llm_judge(ranked: list[Ranked], persona: str = "general",
               cfg: Config | None = None) -> list[Ranked]:
     """Re-rank a shortlist with an OpenAI-compatible chat endpoint.
 
-    Best-effort: any failure returns the input untouched.
+    Best-effort: any failure returns the input untouched. With no provider
+    configured this is a no-op, which is why the deterministic path is the
+    default rather than a fallback.
     """
     cfg = cfg or get_config()
-    if not cfg.has_llm:
-        log.info("no LLM configured, keeping heuristic order")
+    base, api_key, model = _endpoint(cfg)
+    if not base or not model:
+        log.info("no LLM reachable, keeping heuristic order")
         return ranked
+    cfg = replace(cfg, llm_base_url=base, llm_api_key=api_key, llm_model=model)
 
     shortlist = ranked[: cfg.llm_top_k]
     prompt = JUDGE_PROMPT.format(
@@ -237,21 +251,31 @@ def llm_judge(ranked: list[Ranked], persona: str = "general",
         clips="\n".join(_clip_block(r.moment) for r in shortlist),
     )
 
+    payload = {
+        "model": cfg.llm_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
     try:
-        payload = {
-            "model": cfg.llm_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        }
-        # Some local servers reject response_format; retry without it.
         raw = _chat(cfg, payload)
         parsed = _parse_scores(raw)
+        if not parsed:
+            # Some local servers advertise json_object but ignore it, or reject
+            # it outright. Retry once without the hint rather than giving up.
+            log.info("no scores parsed with response_format; retrying without it")
+            raw = _chat(cfg, {k: v for k, v in payload.items()
+                              if k != "response_format"})
+            parsed = _parse_scores(raw)
     except Exception as exc:  # noqa: BLE001
         log.warning("LLM judge failed (%s), keeping heuristic order", exc)
         return ranked
 
     if not parsed:
+        # Never fail silently again: an empty parse used to look identical to
+        # "no model configured".
+        log.warning("LLM judge (%s) returned no usable scores; sample: %r",
+                    cfg.llm_model, (raw or "")[:200])
         return ranked
 
     weights: dict[str, float] = {}
@@ -269,7 +293,6 @@ def llm_judge(ranked: list[Ranked], persona: str = "general",
         return ranked
 
     out: list[Ranked] = []
-    tail = ranked[cfg.llm_top_k:]
     for r in ranked:
         if r.moment.id in weights:
             llm = weights[r.moment.id]
@@ -323,7 +346,8 @@ def _parse_scores(raw: str) -> list[dict]:
 # entry point
 # --------------------------------------------------------------------------
 def rank(moments: list[Moment], persona: str = "general",
-         cfg: Config | None = None, use_llm: bool = True) -> list[Ranked]:
+         cfg: Config | None = None, use_llm: bool = True,
+         prompt_plan=None) -> list[Ranked]:
     cfg = cfg or get_config()
     if persona not in PERSONAS:
         persona = "general"
@@ -331,7 +355,10 @@ def rank(moments: list[Moment], persona: str = "general",
     if not moments:
         return []
     if use_llm:
-        ranked = llm_judge(ranked, persona, cfg)
+        # A free-text prompt is more specific than any fixed persona, so the
+        # judge gets the user's actual words rather than a rubric label.
+        target = getattr(prompt_plan, "raw", "") or persona
+        ranked = llm_judge(ranked, target, cfg)
     else:
         for r in ranked:
             r.reason = _explain(r.subscores)

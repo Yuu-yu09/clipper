@@ -9,6 +9,7 @@ import json
 import logging
 import shutil
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -17,7 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import asr, captions, ffmpeg, momentgraph, pipeline, rank, render, soundtrack
+from . import (asr, captions, ffmpeg, momentgraph, pipeline, prompt, providers,
+               rank, render, soundtrack, vision)
 from .config import CLIP_LENGTHS, get_config
 from .jobs import get_manager
 
@@ -85,10 +87,15 @@ def health() -> dict:
         "aspects": list(render.ASPECTS),
         "personas": list(rank.PERSONAS),
         "caption_presets": list(captions.PRESETS),
+        "caption_detail": captions.describe_presets(),
+        "prompt_examples": prompt.EXAMPLES,
+        "prompt_disclaimers": prompt.DISCLAIMERS,
         "clip_lengths": [{"min": lo, "max": hi, "label": lbl}
                          for lo, hi, lbl in CLIP_LENGTHS],
         "moods": list(soundtrack.MOODS),
         "user_music": [p.name for p in soundtrack.user_tracks(cfg)],
+        "providers": providers.status(),
+        "vision_available": _vision_ready(),
         "defaults": {
             "min_clip": cfg.min_clip, "max_clip": cfg.max_clip,
             "max_clips": cfg.max_clips,
@@ -96,6 +103,14 @@ def health() -> dict:
             "auto_sfx": cfg.auto_sfx, "auto_hook": cfg.auto_hook,
         },
     }
+
+
+def _vision_ready() -> bool:
+    """True only when a provider that can actually read images is available."""
+    try:
+        return vision.vision_available(cfg)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -106,6 +121,7 @@ async def create_job(
     file: UploadFile | None = File(default=None),
     url: str | None = Form(default=None),
     persona: str = Form(default="general"),
+    custom_prompt: str = Form(default=""),
     aspect: str = Form(default="9:16"),
     caption_style: str = Form(default="pop"),
     clip_length: str = Form(default="auto"),
@@ -117,6 +133,8 @@ async def create_job(
     auto_hook: bool = Form(default=False),
     use_llm: bool = Form(default=True),
     use_graph: bool = Form(default=True),
+    use_vision: bool = Form(default=True),
+    llm_provider: str = Form(default=""),
     max_clips: int | None = Form(default=None),
 ) -> dict:
     if file is None and not (url or "").strip():
@@ -124,6 +142,10 @@ async def create_job(
 
     persona = persona if persona in ("funny", "candid", "surprising", "general") else "general"
     aspect = aspect if aspect in render.ASPECTS else "9:16"
+    # NOTE: bind a NEW name. `cfg` is a module-level global; assigning to it here
+    # would make it function-local for the whole of create_job and turn every
+    # earlier `cfg` reference into an UnboundLocalError.
+    job_cfg = replace(cfg, llm_provider=llm_provider) if llm_provider else cfg
 
     # The job id is minted here so the upload can be streamed to disk before the
     # worker thread starts. No id race, and no shared mutable closure state.
@@ -163,7 +185,7 @@ async def create_job(
     def work(progress: Callable[[int, str], None]) -> dict:
         if url:
             progress(1, "downloading source")
-            src = pipeline.download(url, src_dir, cfg)
+            src = pipeline.download(url, src_dir, job_cfg)
             staged.unlink(missing_ok=True)
         else:
             src = staged
@@ -171,21 +193,23 @@ async def create_job(
 
         result = pipeline.run(
             src, jobdir / "work", jobdir / "clips",
-            persona=persona, aspect=aspect, caption_style=caption_style,
+            persona=persona, prompt_text=custom_prompt, aspect=aspect,
+            caption_style=caption_style,
             clip_length=clip_length,
             burn_captions=captions_on, reframe=reframe, auto_zoom=auto_zoom,
             music=music, auto_sfx=auto_sfx, auto_hook=auto_hook,
-            use_llm=use_llm, use_graph=use_graph,
-            cfg=cfg, progress=progress,
+            use_llm=use_llm, use_graph=use_graph, use_vision=use_vision,
+            cfg=job_cfg, progress=progress,
         )
         result["job_id"] = job_id
         result["options"] = {
-            "persona": persona, "aspect": aspect,
+            "persona": persona, "prompt": custom_prompt, "aspect": aspect,
             "caption_style": caption_style, "clip_length": clip_length,
             "captions": captions_on, "reframe": reframe,
             "auto_zoom": auto_zoom, "music": music, "auto_sfx": auto_sfx,
             "auto_hook": auto_hook,
             "use_llm": use_llm, "use_graph": use_graph,
+            "use_vision": use_vision,
             "max_clips": max_clips or cfg.max_clips,
         }
         (jobdir / "result.json").write_text(
@@ -262,6 +286,97 @@ def job_source(job_id: str):
     if not files:
         raise HTTPException(404, "source not found")
     return FileResponse(files[0], media_type="application/octet-stream")
+
+
+# --------------------------------------------------------------------------
+# caption style preview
+# --------------------------------------------------------------------------
+# A real render, not an approximation: the point is to see what actually gets
+# burned into the clip, including libass behaviour the browser cannot copy.
+PREVIEW_WORDS = [
+    "this", "is", "literally", "the", "funniest",
+    "moment", "in", "the", "whole", "episode",
+]
+
+
+def _preview_words() -> list[asr.Word]:
+    """Word timings laid out like speech, so the karaoke sweep looks natural."""
+    out: list[asr.Word] = []
+    t = 0.55
+    for i, w in enumerate(PREVIEW_WORDS):
+        d = 0.30 + (0.16 if len(w) > 5 else 0.0)
+        out.append(asr.Word(t, t + d, w))
+        t += d + (0.30 if i in (5, 10) else 0.07)
+    return out
+
+
+@app.get("/api/preview/caption.mp4")
+def caption_preview(style: str = "pop", aspect: str = "9:16",
+                    headline: bool = False):
+    """Render a few seconds of a sample clip in the given caption style."""
+    if style not in captions.PRESETS:
+        raise HTTPException(400, f"unknown caption style {style!r}")
+    if aspect not in render.ASPECTS:
+        aspect = "9:16"
+
+    words = _preview_words()
+    span = words[-1].end + 0.6
+
+    cache = cfg.data_dir / "_previews"
+    cache.mkdir(parents=True, exist_ok=True)
+    dest = cache / f"cap_{style}_{aspect}_{int(headline)}.mp4"
+
+    if not dest.exists() or dest.stat().st_size < 1024:
+        # animated backdrop so the zoom and captions have something to move on
+        base = cache / f"cap_{style}_{aspect}_{int(headline)}_base.mp4"
+        if not base.exists() or base.stat().st_size < 1024:
+            out_w, out_h = render.ASPECTS[aspect]
+            try:
+                # testsrc2 takes size=WxH with an 'x', not W:H
+                ffmpeg.run([
+                    cfg.ffmpeg, "-y", "-f", "lavfi",
+                    "-i", f"testsrc2=size={out_w}x{out_h}:rate=30:duration={span:.2f}",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+                    "-pix_fmt", "yuv420p", str(base),
+                ], timeout=600)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(500, f"preview source failed: {exc}")
+
+        try:
+            render.render_clip(
+                base, 0.0, span, dest,
+                words=words, aspect=aspect, caption_style=style,
+                headline="this is the moment" if headline else "",
+                want_captions=True, want_reframe=False, want_zoom=True,
+                cfg=cfg,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"preview render failed: {exc}")
+
+    return FileResponse(dest, media_type="video/mp4",
+                        headers={"Cache-Control": "max-age=3600"})
+
+
+@app.get("/api/preview/prompt")
+def prompt_preview(text: str = ""):
+    """Compile a prompt server-side so the UI shows exactly what we understood.
+
+    The user should never have to guess whether their prompt was parsed the way
+    they meant it.
+    """
+    plan = prompt.compile_prompt(text)
+    return {
+        "active": plan.active,
+        "describe": plan.describe(),
+        "keywords": plan.keywords,
+        "sentiments": plan.sentiments,
+        "sound_cues": plan.sound_cues,
+        "intent": plan.intent,
+        "count": plan.count,
+        "weights": {k: round(v, 3) for k, v in plan.weights.items()},
+        "notes": plan.notes,
+        "unsupported": plan.unsupported,
+    }
 
 
 # --------------------------------------------------------------------------

@@ -69,7 +69,7 @@ class Config:
     auto_zoom: bool = field(default_factory=lambda: _env_bool("CLIPPER_AUTO_ZOOM", True))
 
     # --- music + sfx -----------------------------------------------------
-    music: str = field(default_factory=lambda: os.getenv("CLIPPER_MUSIC", "upbeat"))
+    music: str = field(default_factory=lambda: os.getenv("CLIPPER_MUSIC", "auto"))
     music_gain: float = field(default_factory=lambda: _env_float("CLIPPER_MUSIC_GAIN", 0.16))
     auto_sfx: bool = field(default_factory=lambda: _env_bool("CLIPPER_AUTO_SFX", True))
 
@@ -77,10 +77,17 @@ class Config:
     auto_hook: bool = field(default_factory=lambda: _env_bool("CLIPPER_AUTO_HOOK", False))
 
     # --- optional LLM judge (OpenAI-compatible) -------------------------
+    # Leave all three unset and a ready provider is auto-detected: Ollama if it
+    # is running locally, otherwise the first configured free tier.
+    llm_provider: str | None = field(
+        default_factory=lambda: os.getenv("CLIPPER_LLM_PROVIDER"))
     llm_base_url: str | None = field(default_factory=lambda: os.getenv("CLIPPER_LLM_BASE_URL"))
     llm_api_key: str | None = field(default_factory=lambda: os.getenv("CLIPPER_LLM_API_KEY"))
     llm_model: str | None = field(default_factory=lambda: os.getenv("CLIPPER_LLM_MODEL"))
     llm_top_k: int = field(default_factory=lambda: _env_int("CLIPPER_LLM_TOP_K", 24))
+
+    # --- optional vision pass (visual prompt cues) ----------------------
+    use_vision: bool = field(default_factory=lambda: _env_bool("CLIPPER_USE_VISION", True))
 
     # --- behaviour ------------------------------------------------------
     use_graphify: bool = field(default_factory=lambda: _env_bool("CLIPPER_USE_GRAPHIFY", True))
@@ -103,7 +110,14 @@ class Config:
 
     @property
     def has_llm(self) -> bool:
-        return bool(self.llm_base_url and self.llm_model)
+        if self.llm_base_url and self.llm_model:
+            return True
+        try:
+            from . import providers
+            base, _key, model = providers.resolve(self.llm_provider, self.llm_model, self)
+            return bool(base and model)
+        except Exception:  # noqa: BLE001
+            return False
 
     @property
     def has_ffmpeg(self) -> bool:

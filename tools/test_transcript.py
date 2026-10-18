@@ -48,6 +48,8 @@ def main() -> int:
 
     print("transcribing (first run downloads the model) …")
     t = asr.transcribe(audio, cfg)
+    # persist it so tools/test_prompt.py can reuse it instead of re-running ASR
+    t.save(work / "transcript.json")
 
     fails = []
     print(f"\nbackend    {t.backend}")
@@ -94,7 +96,6 @@ def main() -> int:
 
     # word-aligned: a clip should not start in the middle of a word
     if words:
-        boundaries = {round(w.start, 2) for w in words} | {round(w.end, 2) for w in words}
         for m in moments[:8]:
             if m.words and m.words[0].start != m.start:
                 fails.append(f"{m.id} start {m.start} is not a word boundary")
