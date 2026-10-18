@@ -182,7 +182,7 @@ def main() -> int:
         time.sleep(4)
         st, body, _ = get(base, f"/api/jobs/{jid}", timeout=60)
         if st != 200:
-            R.check(False, f"GET /api/jobs/{{id}} during run", f"status={st}")
+            R.check(False, "GET /api/jobs/{id} during run", f"status={st}")
             break
         s = json.loads(body)
         line = f"       [{s.get('progress', 0):3}%] {s.get('status')} {s.get('step')}"
