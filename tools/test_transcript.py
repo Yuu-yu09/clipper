@@ -114,14 +114,29 @@ def main() -> int:
             head = ass.read_text(encoding="utf-8")
             if "Dialogue:" not in head:
                 fails.append("ass has no Dialogue events")
-            if "{kf" not in head:
-                print("  note: no karaoke tags found (single-word groups?)")
+            # the karaoke override is the literal tag  {\kf1:...
+            if "{\\kf" not in head:
+                fails.append("ass has no karaoke (\\kf) tags")
+            else:
+                print(f"  karaoke tags: {head.count('{\\kf')}")
 
     # ---- full render with burned captions ----
+    # Render from a video, not the raw wav -- the reframer needs real frames.
+    vid = work / "speech.mp4"
+    if not vid.exists():
+        dur = max(2.0, t.duration)
+        ffmpeg.run([
+            cfg.ffmpeg, "-y",
+            "-f", "lavfi", "-i", f"testsrc2=size=1280x720:rate=25:duration={dur:.1f}",
+            "-i", str(audio),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(vid),
+        ], timeout=900)
+
     print("\nrendering a clip with burned captions …")
     dest = work / "clip.mp4"
     try:
-        res = render.render_clip(audio, 0.0, min(duration, 20.0), dest,
+        res = render.render_clip(vid, 0.0, min(t.duration or 20.0, 20.0), dest,
                                  words=words, aspect="9:16",
                                  caption_style="pop", want_captions=True,
                                  want_reframe=False, cfg=cfg)

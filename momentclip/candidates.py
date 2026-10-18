@@ -150,6 +150,10 @@ def _from_sentences(transcript: asr.Transcript, cfg: Config) -> list[tuple[float
             if too_long:
                 break
             j += 1
+        # The inner loop can exit with j == len(utts) when nothing closed the
+        # thought (a trailing run of fragments, or speech with no punctuation).
+        # Clamp rather than index past the end.
+        j = min(j, len(utts) - 1)
         end = utts[j].end
         if cfg.min_clip <= (end - start) <= cfg.max_clip:
             text = " ".join(u.text for u in utts[i : j + 1]).strip()
@@ -172,8 +176,12 @@ def _from_events(events: list[Event], track: dict, duration: float,
         # best few per kind, strongest first
         for ev in sorted(by_kind[kind], key=lambda e: -e.strength)[:12]:
             for target in (35.0, 55.0, 80.0):
+                target = min(target, duration)
                 half = target / 2.0
-                start = max(0.0, ev.start - half * 0.45)
+                # Centre the window on the event. Anchoring at the start makes
+                # every long window on a short source collapse to the same
+                # end-of-file range, which then dedupes to nothing useful.
+                start = max(0.0, min(duration - target, ev.start - half))
                 end = min(duration, start + target)
                 if (end - start) < cfg.min_clip:
                     continue

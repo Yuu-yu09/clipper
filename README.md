@@ -194,24 +194,47 @@ momentclip/
 ├─ server.py       FastAPI
 └─ web/            the UI (no build step)
 tools/
-├─ make_fixture.py  synthesises a video with known planted moments
-├─ selftest.py      checks the detector finds those planted moments
-└─ e2e_test.py      full pipeline, asserts clips render and stay watermark-free
+├─ make_fixture.py       synthesises a tone video with known planted moments
+├─ make_speech_fixture.ps1  real spoken audio via Windows TTS (tests the ASR path)
+├─ selftest.py           the detector must find those planted moments
+├─ e2e_test.py           full pipeline, asserts clips render and stay watermark-free
+└─ test_transcript.py    ASR, word alignment, karaoke captions, burned output
 ```
 
 ---
 
 ## Tests
 
+Four suites, each covering a layer that the others can't reach.
+
 ```powershell
-python tools\make_fixture.py    # build fixtures/test_podcast.mp4
-python tools\selftest.py        # 5/5 planted signal events must be detected
-python tools\e2e_test.py        # full pipeline, 0 failures expected
+# 1. signal detection — synthetic video with known planted moments
+python tools\make_fixture.py
+python tools\selftest.py
+
+# 2. full pipeline on tones: graph, ranking, render, watermark guarantee
+python tools\e2e_test.py
+
+# 3. transcript path — needs REAL words, so it uses Windows TTS
+powershell -File tools\make_speech_fixture.ps1
+python tools\test_transcript.py
 ```
 
-`selftest.py` plants a laughter burst, an energy shock, a pitch sweep, a silent
-beat and an overlapping-voice section at known timestamps, then asserts the
-detector finds each one. If a threshold change breaks the detector, this fails.
+| Suite | Covers | Needs |
+|---|---|---|
+| `selftest.py` | 5 planted signal events must each be detected | `make_fixture.py` output |
+| `e2e_test.py` | graph, ranking, render, 9:16 geometry, no overlay | fixture 1 |
+| `test_transcript.py` | ASR, word-timestamp integrity, word-aligned cuts, karaoke `.ass`, burned captions | fixture 3 |
+| `run.py --check` | reports which optional backends are live | — |
+
+`selftest.py` is the important one: it plants a laughter burst, an energy shock,
+a pitch sweep, a silent beat and an overlapping-voice section at known
+timestamps, then asserts the detector finds each. Thresholds in `signals.py`
+are tuned to keep it at 5/5 — if a tweak breaks the detector, this fails.
+
+Fixture 3 exists because the tone fixture has **no recognisable speech by
+design**, so whisper correctly reports "no speech" on it. Testing the ASR and
+caption path needs actual words, hence TTS.
 
 ---
 
