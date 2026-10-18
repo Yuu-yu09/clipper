@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Clipper — find the good moments</title>
+<meta name="description" content="Long video in. The funny, candid and surprising parts out. No watermark, ever. Free and open source, runs entirely on your machine." />
+<meta name="theme-color" content="#08090c" />
+<meta name="color-scheme" content="dark" />
 <link rel="stylesheet" href="/style.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✂️</text></svg>" />
 </head>
@@ -37,6 +40,12 @@
 </div>
 
 <main>
+  <!-- ---------------- mode ---------------- -->
+  <div class="modes">
+    <button class="mode on" data-mode="clip">✂️ Clip a video</button>
+    <button class="mode" data-mode="story">📖 Make a story</button>
+  </div>
+
   <!-- ---------------- intake ---------------- -->
   <section id="intake" class="card">
     <div class="tabs">
@@ -148,6 +157,61 @@
       <button id="cancel" class="link">cancel</button>
     </div>
     <div id="err" class="err hidden"></div>
+  </section>
+
+  <!-- ---------------- story mode ---------------- -->
+  <section id="story" class="card hidden">
+    <p class="lead">
+      Give it a premise and a cast. It writes a ten-episode season — titles,
+      loglines and beat sheets — then assembles each episode as a motion
+      storyboard with its own soundtrack, captions and auto-zoom.
+    </p>
+
+    <label class="flabel" for="premise">Premise</label>
+    <textarea id="premise" rows="3" placeholder="A retired getaway driver is forced to take one last job with the crew she swore she would never work with again."></textarea>
+    <p class="hint" id="premisecount">0 characters</p>
+
+    <label class="flabel">Cast <em>— mark who is who</em></label>
+    <div id="cast" class="cast"></div>
+    <button id="addchar" class="link">+ add a character</button>
+
+    <div class="row2">
+      <div class="opt">
+        <label>Episodes</label>
+        <div class="segmented" id="epeps">
+          <button data-v="5">5</button>
+          <button data-v="10" class="on">10</button>
+          <button data-v="15">15</button>
+        </div>
+      </div>
+      <div class="opt">
+        <label>Aspect</label>
+        <div class="segmented" id="saspect">
+          <button data-v="9:16" class="on">9:16</button>
+          <button data-v="16:9">16:9</button>
+          <button data-v="1:1">1:1</button>
+        </div>
+      </div>
+      <div class="opt">
+        <label>Caption style</label>
+        <div class="segmented" id="sstyle">
+          <button data-v="pop" class="on">Pop</button>
+          <button data-v="hormozi">Hormozi</button>
+          <button data-v="clean">Clean</button>
+          <button data-v="podcast">Podcast</button>
+        </div>
+      </div>
+    </div>
+
+    <label class="flabel">Notes for the writer <em>optional</em></label>
+    <input type="text" id="snotes" placeholder="Keep it grounded, no magic. Marcus should not die." />
+
+    <button id="splan" class="go">Write the season</button>
+    <div id="sprogress" class="progress hidden">
+      <div class="bar"><i id="sbarfill"></i></div>
+      <span id="stext">planning…</span>
+    </div>
+    <div id="serr" class="err hidden"></div>
   </section>
 
   <!-- ---------------- results ---------------- -->

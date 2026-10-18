@@ -13,13 +13,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile, File
+from fastapi import FastAPI, Form, HTTPException, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from . import (asr, captions, ffmpeg, momentgraph, pipeline, prompt, providers,
-               rank, render, soundtrack, vision)
+from . import (asr, assembly, captions, ffmpeg, momentgraph, pipeline, prompt,
+               providers, rank, render, soundtrack, story, vision)
 from .config import CLIP_LENGTHS, get_config, is_serverless
 from .jobs import get_manager
 
@@ -308,6 +309,156 @@ def job_source(job_id: str):
     if not files:
         raise HTTPException(404, "source not found")
     return FileResponse(files[0], media_type="application/octet-stream")
+
+
+# --------------------------------------------------------------------------
+# story mode
+# --------------------------------------------------------------------------
+class CharacterIn(BaseModel):
+    name: str
+    role: str = "ally"
+    description: str = ""
+    image: str | None = None       # relative to the story dir, or a data id
+
+
+class StoryRequest(BaseModel):
+    premise: str
+    characters: list[CharacterIn] = []
+    episode_count: int = 10
+    extra_notes: str = ""
+    use_llm: bool = True
+
+
+STORIES = cfg.data_dir / "stories"
+
+
+@app.post("/api/story/plan")
+def story_plan(req: StoryRequest):
+    """Write the season: bible, cast arcs, ten episodes with beat sheets."""
+    if not (req.premise or "").strip():
+        raise HTTPException(400, "a premise is required")
+    if SERVERLESS:
+        raise HTTPException(503, f"Engine unavailable on this deployment.\n{SERVERLESS_NOTE}")
+
+    sid = uuid.uuid4().hex[:10]
+    sdir = STORIES / sid
+    sdir.mkdir(parents=True, exist_ok=True)
+
+    chars = []
+    for i, c in enumerate(req.characters):
+        image = c.image
+        if image and not Path(image).is_absolute():
+            image = str(sdir / image)
+        chars.append(story.Character(
+            name=c.name, role=story.normalise_role(c.role),
+            description=c.description, image=image,
+        ))
+
+    def work(progress):
+        season = story.build_season(
+            req.premise, chars, cfg,
+            episode_count=max(1, min(30, req.episode_count)),
+            use_llm=req.use_llm, extra_notes=req.extra_notes,
+            progress=progress)
+        payload = season.to_dict()
+        payload["story_id"] = sid
+        payload["markdown"] = season.to_markdown()
+        (sdir / "season.json").write_text(
+            __import__("json").dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+        (sdir / "season.md").write_text(payload["markdown"], encoding="utf-8")
+        return payload
+
+    job = manager.submit("story", work, job_id=sid)
+    return job.to_dict()
+
+
+@app.post("/api/story/render")
+def story_render(payload: dict = Body(...)):
+    """Assemble the planned episodes into videos."""
+    sid = str(payload.get("story_id") or "")
+    base = (STORIES / sid).resolve()
+    if not sid or not str(base).startswith(str(STORIES.resolve())):
+        raise HTTPException(400, "invalid story id")
+    sfile = base / "season.json"
+    if not sfile.exists():
+        raise HTTPException(404, "no such story; plan it first")
+    if SERVERLESS:
+        raise HTTPException(503, f"Engine unavailable on this deployment.\n{SERVERLESS_NOTE}")
+
+    data = json.loads(sfile.read_text(encoding="utf-8"))
+    aspect = str(payload.get("aspect") or "9:16")
+    style = str(payload.get("caption_style") or "pop")
+    mood = str(payload.get("music") or "auto")
+    sfx_on = bool(payload.get("auto_sfx", True))
+    cap = payload.get("max_episodes")
+    cap = int(cap) if cap else None
+    outdir = base / "episodes"
+
+    def work(progress):
+        season = story.Season(
+            title=data.get("title", "Season"), premise=data.get("premise", ""),
+            logline=data.get("logline", ""), theme=data.get("theme", ""),
+            theme_statement=data.get("theme_statement", ""),
+            tone=data.get("tone", ""), setting=data.get("setting", ""),
+            characters=[story.Character(**{k: v for k, v in c.items()
+                                           if k in ("name", "role", "description",
+                                                    "image", "arc")})
+                        for c in data.get("characters", [])],
+            episodes=[story.Episode(
+                number=e["number"], title=e["title"], logline=e.get("logline", ""),
+                summary=e.get("summary", ""), function=e.get("function", ""),
+                mood=e.get("mood", ""),
+                beats=[story.Beat(text=b["text"], character=b.get("character"),
+                                  image=b.get("image"), motion=b.get("motion", "in"),
+                                  seconds=float(b.get("seconds") or 5))
+                       for b in e.get("beats", [])])
+                for e in data.get("episodes", [])],
+        )
+        results, _ = assembly.assemble_season(
+            season, outdir, cfg, aspect=aspect, caption_style=style,
+            music_mood=mood, auto_sfx=sfx_on, max_episodes=cap,
+            progress=progress)
+        return {
+            "story_id": sid,
+            "season": data.get("title"),
+            "episodes": [r.to_dict() for r in results],
+            "total_seconds": round(sum(r.duration for r in results), 1),
+        }
+
+    job = manager.submit("story-render", work, job_id=sid + "r")
+    return job.to_dict()
+
+
+@app.get("/api/story/roles")
+def story_roles() -> dict:
+    return {
+        "roles": [{"key": k, "label": k.replace("_", " "),
+                   "hint": v} for k, v in story.ARCHETYPES.items()],
+        "tones": story.TONES,
+        "settings": story.SETTING_TONES,
+        "default_episodes": story.EPISODES,
+    }
+
+
+@app.get("/api/story/{story_id}/episode/{n}.mp4")
+def story_episode(story_id: str, n: int):
+    base = (STORIES / story_id).resolve()
+    if not str(base).startswith(str(STORIES.resolve())):
+        raise HTTPException(400, "invalid story id")
+    path = (base / "episodes" / f"episode_{int(n):02d}.mp4").resolve()
+    if not path.exists():
+        raise HTTPException(404, "episode not rendered")
+    return FileResponse(path, media_type="video/mp4",
+                        headers={"Accept-Ranges": "bytes"})
+
+
+@app.get("/api/story/{story_id}/season.md")
+def story_markdown(story_id: str):
+    path = (STORIES / story_id).resolve() / "season.md"
+    if not path.exists():
+        raise HTTPException(404, "no season document")
+    return FileResponse(path, media_type="text/markdown")
 
 
 # --------------------------------------------------------------------------

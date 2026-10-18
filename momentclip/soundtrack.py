@@ -282,6 +282,78 @@ def user_tracks(cfg: Config | None = None) -> list[Path]:
 # --------------------------------------------------------------------------
 # mixing
 # --------------------------------------------------------------------------
+def check_filtergraph(fc: str) -> list[str]:
+    """Catch malformed filter_complex strings before ffmpeg chokes on them.
+
+    Two mistakes account for nearly every filter-graph failure here, and both
+    are silent in Python and confusing in ffmpeg:
+
+      "[bed]amix"      -- a label stripped of its brackets and concatenated
+                          becomes a filter literally named "bedamix", and
+                          ffmpeg reports "No such filter: 'bedamix'".
+      unescaped commas inside a function call argument list, e.g. "clip(0,1)"
+                          in a crop expression, split the argument in the
+                          wrong place.
+
+    Returns a list of problems; empty means it looks well-formed.
+    """
+    problems: list[str] = []
+    # Real filter names. amixer is the filter; the *label* is [bg]. The bug is
+    # concatenating a label with a filter name into one token ("[bed]amix"
+    # after stripping), which ffmpeg then reads as a filter called "bedamix".
+    known = {"amix", "alimiter", "anull", "aformat", "volume", "adelay",
+             "sidechaincompress", "anullsrc", "aeval", "atrim", "asetpts",
+             "aresample", "pan", "afade", "apad", "areverse"}
+
+    # Labels are declared as "[name]" at the END of a filter chain. A label
+    # glued directly to more filter text (no '=', no ':') is the bug.
+    for part in fc.split(";"):
+        chain = part.strip()
+        while chain.startswith("["):
+            close = chain.find("]")
+            if close < 0:
+                break
+            chain = chain[close + 1:]
+        if not chain:
+            continue
+        head = chain.split("=", 1)[0].split(":", 1)[0].strip()
+        if not head or head in known:
+            continue
+        # head is unknown. If it ends with a known filter, a label was
+        # concatenated onto it.
+        for k in known:
+            if head.endswith(k) and head != k:
+                problems.append(
+                    f"filter name {head!r} ends with {k!r} -- looks like a "
+                    f"label concatenated onto a filter name; keep the label's "
+                    f"brackets (e.g. '[bed]amix', not 'bedamix')")
+                break
+
+    # unescaped commas inside clip(/min(/max(/pow(
+    for fn in ("clip", "min", "max", "pow", "between"):
+        idx = 0
+        while (idx := fc.find(fn + "(", idx)) != -1:
+            depth, i, bad = 1, idx + len(fn) + 1, False
+            while i < len(fc) and depth:
+                if fc[i] == "\\":
+                    i += 2
+                    continue
+                if fc[i] == "(":
+                    depth += 1
+                elif fc[i] == ")":
+                    depth -= 1
+                elif fc[i] == "," and depth == 1:
+                    bad = True
+                i += 1
+            if bad:
+                snippet = fc[idx:idx + 60]
+                problems.append(
+                    f"unescaped comma inside {fn}() -- ffmpeg will split the "
+                    f"argument: {snippet!r}")
+            idx += 1
+    return problems
+
+
 @dataclass
 class MixSpec:
     """What the renderer should mix under the speech."""

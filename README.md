@@ -143,6 +143,52 @@ reading on top of the deterministic compile.
 
 ---
 
+## Story mode
+
+The second tab. Give it a premise and a cast marked by role, and it writes a
+**ten-episode season**, then assembles each episode.
+
+**Planning** (`story.py`) produces a season bible — logline, theme, tone,
+setting — then ten episodes that each have a *different job* in the arc:
+
+```
+1  The Ordinary Life      establishes the world and the want
+2  Crossing the Line      the first irreversible act
+3  The First Cost         you win something and lose something larger
+4  False Victory          the setup pays off perfectly
+5  The Betrayal           an ally becomes a liability
+6  Midpoint Revelation    the truth that recontextualises everything
+7  The Price of Everything consequences compound
+8  Descent                the antagonist's plan works
+9  The Turn               the wound and the want finally collide
+10 Aftermath              resolution, and an epilogue that proves the change
+```
+
+Because each episode has a distinct function, the fallback season still reads
+as a season rather than ten variations on the same idea — which matters,
+because the fallback is what runs when no model is reachable. Roles are real
+dramatic positions, not labels: protagonist, antagonist, mentor, ally, rival,
+love interest, trickster. The prompt tells the model to reuse your names
+verbatim, and every beat is resolved back to an actual cast member, so it
+cannot quietly invent a fifth character.
+
+**Assembly** (`assembly.py`) renders each beat as a shot: the character's image
+(or a generated plate), Ken Burns motion, an animated caption of the beat text,
+and a punch-in on high-tension beats — deaths, betrayals, revelations. Music
+runs the whole episode, adapted per episode so the arc escalates, with
+stingers on the tense beats.
+
+### What this is not
+
+This is a **motion storyboard**: the frame moves around a still, the
+characters do not move. Real generative animation needs a video model
+(Dreamina/Seedance, Kling, Runway), and those are either paid APIs or web-UIs
+with no programmatic free tier — there is no free local option at any usable
+quality. The visual slot is an interface on purpose: when a BytePlus key
+exists, generated clips drop into the same place and nothing else changes.
+
+---
+
 ## Using AI for free
 
 Clipper runs fully without a model — the deterministic path is the default, not
@@ -243,6 +289,11 @@ not against screenshots.
 | Virality Score | `rank.py` score | different method, and we show the breakdown |
 | Watermark (lower plans) | **none** | structural guarantee, see `render.py` |
 | — | caption style preview | see `GET /api/preview/caption.mp4` |
+
+Clipper also has a mode OpusClip does not: **📖 Make a story** — give it a
+premise and a cast, and it writes a ten-episode season (titles, loglines, beat
+sheets) then assembles each episode as a motion storyboard with its own
+soundtrack, captions and auto-zoom. See [Story mode](#story-mode).
 
 **Not implemented**, and honestly so:
 
@@ -413,6 +464,16 @@ GET  /api/jobs/{id}/artifact/{path}   transcript.json, graph.json, .srt, signals
 POST /api/jobs/{id}/cancel
 ```
 
+Story mode:
+
+```
+POST /api/story/plan                     premise + cast -> a written season
+POST /api/story/render                   assemble the planned episodes
+GET  /api/story/roles                    role list, tones, default episode count
+GET  /api/story/{id}/episode/{n}.mp4     stream one episode
+GET  /api/story/{id}/season.md           the season as a markdown document
+```
+
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/api/jobs `
   -F "file=@podcast.mp4" -F "persona=funny" -F "aspect=9:16"
@@ -433,6 +494,8 @@ momentclip/
 ├─ captions.py     6 animated ASS presets, .srt sidecars, headline overlay
 ├─ soundtrack.py   adaptive per-clip music beds + comedy stingers (no audio assets)
 ├─ prompt.py       free-text prompt compiler (the ClipAnything equivalent)
+├─ story.py        season planning: cast, arc functions, 10 episodes, beats
+├─ assembly.py     storyboard assembly: Ken Burns, captions, zoom, score
 ├─ asr.py          faster-whisper with an HTTP fallback; never raises
 ├─ pipeline.py     the orchestration
 ├─ server.py       FastAPI

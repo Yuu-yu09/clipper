@@ -504,6 +504,7 @@
     }
 
     $("#clips").innerHTML = clips.map((c) => clipCard(c, result.job_id)).join("");
+    reveal(); // results were injected after the first pass; animate them in
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -566,6 +567,273 @@
   }
   function hideErr() { $("#err").classList.add("hidden"); }
 
+  // ---------------------------------------------------------- story mode
+  let ROLES = [];
+  const castRows = [];
+
+  function addCastRow(name = "", role = "ally", desc = "") {
+    const row = el("div", "crow");
+    const n = el("input"); n.type = "text"; n.placeholder = "Name"; n.value = name;
+    const r = el("select");
+    (ROLES.length ? ROLES : [{ key: "protagonist" }, { key: "antagonist" },
+      { key: "ally" }, { key: "mentor" }, { key: "rival" },
+      { key: "love_interest" }, { key: "trickster" }])
+      .forEach((o) => {
+        const opt = el("option", "", esc((o.label || o.key).replace(/_/g, " ")));
+        opt.value = o.key; r.appendChild(opt);
+      });
+    r.value = role;
+    const d = el("input"); d.type = "text"; d.placeholder = "Who are they?"; d.value = desc;
+    const x = el("button", "rm", "✕"); x.type = "button";
+    x.addEventListener("click", () => {
+      const i = castRows.indexOf(row);
+      if (i >= 0) castRows.splice(i, 1);
+      row.remove(); recolour();
+    });
+    row.append(n, r, d, x);
+    $("#cast").appendChild(row);
+    castRows.push(row);
+    recolour();
+  }
+
+  // mark the protagonist and antagonist rows so the cast is readable at a glance
+  function recolour() {
+    castRows.forEach((row) => {
+      const role = row.querySelector("select").value;
+      row.classList.toggle("hero", role === "protagonist" || role === "antagonist");
+    });
+  }
+
+  function castPayload() {
+    return castRows.map((row) => {
+      const [n, r, d] = row.children;
+      return {
+        name: n.value.trim(),
+        role: r.value,
+        description: d.value.trim(),
+        image: row.dataset.img || null,
+      };
+    }).filter((c) => c.name);
+  }
+
+  async function setupStory() {
+    try {
+      const meta = await (await fetch(api("/api/story/roles"))).json();
+      ROLES = meta.roles || [];
+      addCastRow("Dana Reyes", "protagonist", "ex-getaway driver, calm under pressure");
+      addCastRow("Marcus Vale", "antagonist", "the crew boss who betrayed her");
+      addCastRow("Joss", "ally", "youngest of the crew, talks too much");
+      addCastRow("Ines", "mentor", "the old planner, keeps a ledger of favours");
+      $("#premisecount").textContent =
+        `${meta.default_episodes} episodes by default · ${ROLES.length} roles available`;
+    } catch {
+      addCastRow("", "protagonist", "");
+      addCastRow("", "antagonist", "");
+    }
+  }
+
+  wire("#epeps", () => {});
+  wire("#saspect", () => {});
+  wire("#sstyle", () => {});
+  $("#addchar").addEventListener("click", () => addCastRow());
+  $("#premise").addEventListener("input", (e) => {
+    $("#premisecount").textContent = `${e.target.value.length} characters`;
+  });
+
+  $$(".mode").forEach((b) =>
+    b.addEventListener("click", () => {
+      $$(".mode").forEach((x) => x.classList.toggle("on", x === b));
+      const story = b.dataset.mode === "story";
+      $("#intake").classList.toggle("hidden", story);
+      $("#story").classList.toggle("hidden", !story);
+      $("#results").classList.add("hidden");
+    }));
+
+  $("#splan").addEventListener("click", planSeason);
+
+  async function planSeason() {
+    hideSErr();
+    const premise = $("#premise").value.trim();
+    if (!premise) return showSErr("Write a premise first — one or two sentences.");
+    const chars = castPayload();
+    if (!chars.length) return showSErr("Add at least one named character.");
+    const protagonist = chars.find((c) => c.role === "protagonist");
+    if (!protagonist) return showSErr("Mark one character as the protagonist.");
+
+    $("#splan").disabled = true;
+    $("#sprogress").classList.remove("hidden");
+    sProgress(5, "writing the season bible…");
+    try {
+      const res = await fetch(api("/api/story/plan"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          premise,
+          characters: chars,
+          episode_count: parseInt(pick("#epeps"), 10),
+          extra_notes: $("#snotes").value.trim(),
+          use_llm: $("#usellm").checked,
+        }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      sPoll(data.id, "plan");
+    } catch (e) {
+      $("#splan").disabled = false;
+      showSErr(e.message);
+    }
+  }
+
+  let sTimer = null;
+  function sPoll(id, kind) {
+    clearTimeout(sTimer);
+    sTimer = setTimeout(async () => {
+      try {
+        const j = await (await fetch(api(`/api/jobs/${id}`))).json();
+        sProgress(j.progress, j.step);
+        if (j.status === "running" || j.status === "queued") return sPoll(id, kind);
+        if (j.status === "done") {
+          $("#splan").disabled = false;
+          $("#sprogress").classList.add("hidden");
+          if (kind === "plan") return showSeason(j.result);
+          return showEpisodes(j.result);
+        }
+        $("#splan").disabled = false;
+        showSErr(j.error || "failed");
+      } catch (e) {
+        $("#splan").disabled = false;
+        showSErr(e.message);
+      }
+    }, 900);
+  }
+
+  function sProgress(pct, text) {
+    $("#sbarfill").style.width = `${Math.max(2, pct)}%`;
+    $("#stext").textContent = text || "";
+  }
+
+  let STORY = null;
+  function showSeason(season) {
+    STORY = season;
+    $("#story").classList.add("hidden");
+    $("#results").classList.remove("hidden");
+    $("#summary").innerHTML = `
+      <div class="season">
+        <h2>${esc(season.title)}</h2>
+        <div class="meta">${esc(season.logline)}</div>
+        <div class="meta">Tone: ${esc(season.tone)} · Setting: ${esc(season.setting)}</div>
+        <div class="theme"><b>${esc(season.theme)}</b> — ${esc(season.theme_statement)}</div>
+        <div class="meta"><b>Cast</b> — ${(season.characters || [])
+          .map((c) => `${esc(c.name)} <em>(${esc(c.role.replace(/_/g, " "))})</em>`)
+          .join(" · ")}</div>
+        <div class="eplist">
+          ${(season.episodes || []).map((e) => `
+            <div class="ep" id="ep${e.number}">
+              <span class="n">${e.number}</span>
+              <span>
+                <span class="t">${esc(e.title)}</span>
+                <span class="fn"> — ${esc(e.function || "")}</span>
+                <span class="l">${esc(e.logline || e.summary || "")}</span>
+              </span>
+              <span class="time">${e.beats.length} shots</span>
+            </div>`).join("")}
+        </div>
+        <div class="actions" style="margin-top:16px">
+          <a class="primary" download href="${api(`/api/story/${season.story_id}/season.md`)}">
+            Download the season document
+          </a>
+          <button id="renderall" class="link">Render all episodes</button>
+        </div>
+      </div>`;
+    $("#graphbox").innerHTML = "";
+    $("#clips").innerHTML = "";
+    $("#renderall").addEventListener("click", renderSeason);
+    reveal();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function renderSeason() {
+    hideSErr();
+    $("#renderall").disabled = true;
+    $("#sprogress").classList.remove("hidden");
+    sProgress(3, "rendering episodes…");
+    try {
+      const res = await fetch(api("/api/story/render"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: STORY.story_id,
+          aspect: pick("#saspect"),
+          caption_style: pick("#sstyle"),
+          music: pick("#mood"),
+          auto_sfx: $("#sfx").checked,
+        }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      sPoll(data.id, "render");
+    } catch (e) {
+      $("#renderall").disabled = false;
+      showSErr(e.message);
+    }
+  }
+
+  function showEpisodes(result) {
+    $("#renderall").disabled = false;
+    (result.episodes || []).forEach((e) => {
+      const node = $(`#ep${e.number}`);
+      if (!node) return;
+      node.classList.add("done");
+      if (e.path) {
+        const src = api(`/api/story/${STORY.story_id}/episode/${e.number}.mp4`);
+        const v = document.createElement("video");
+        v.src = src; v.controls = true; v.preload = "metadata"; v.playsInline = true;
+        node.querySelector("span:nth-child(2)").appendChild(v);
+      } else {
+        node.querySelector("span:nth-child(2)")
+          .insertAdjacentHTML("beforeend",
+            `<span class="l" style="color:#ff9d84">${esc(e.error || "failed")}</span>`);
+      }
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function showSErr(m) { const n = $("#serr"); n.textContent = m; n.classList.remove("hidden"); }
+  function hideSErr() { $("#serr").classList.add("hidden"); }
+
+  // ------------------------------------------------- reveal on scroll
+  // The single motion effect in the product. Effects are worth almost nothing
+  // on their own (see the design notes in style.css); this one exists so long
+  // result lists enter rather than snap, and it is a no-op under
+  // prefers-reduced-motion because the CSS only defines .reveal when motion
+  // is welcome.
+  function reveal() {
+    // only nodes we have not already tagged, so calling reveal() again after
+    // injecting results does not re-animate what has already appeared
+    const items = document.querySelectorAll(
+      ".card:not(.reveal), .clip:not(.reveal), .ep:not(.reveal)"
+    );
+    if (!items.length) return;
+    if (!("IntersectionObserver" in window)) {
+      items.forEach((n) => n.classList.add("in"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e, i) => {
+          if (!e.isIntersecting) return;
+          // stagger, so a wall of clips cascades instead of popping as one block
+          setTimeout(() => e.target.classList.add("in"), Math.min(i * 45, 360));
+          io.unobserve(e.target);
+        });
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.06 }
+    );
+    items.forEach((n) => { n.classList.add("reveal"); io.observe(n); });
+  }
+  reveal();
+
   setupEnginePanel();
+  setupStory();
   loadCaps();
 })();
