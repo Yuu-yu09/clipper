@@ -16,6 +16,55 @@ processing-minute cap, no upload to anyone's cloud.
 
 ---
 
+## The look
+
+Built to match what people actually ship on short-form, using the same ideas as
+OpusClip (whose docs are the reference — see *Feature parity* below).
+
+**Animated captions.** Not subtitles — word-by-word. Each word gets its own
+`\k` karaoke timing, a colour change while it is being spoken, and a `\t` scale
+pop as it lands. Six presets, including the karaoke look OpusClip ships as
+`preset-fancy-Karaoke`:
+
+| Preset | Look |
+|---|---|
+| `hormozi` | bold yellow, all caps, heavy stroke |
+| `pop` | white with a bright yellow active word |
+| `gradient` | soft green sweep, Montserrat |
+| `boxed` | white on an opaque box |
+| `clean` | restrained, thin stroke |
+| `podcast` | 6 words a line, low margin |
+
+3–4 words per line, broken on pauses and punctuation — not whole sentences.
+
+**Auto-zoom.** A slow push-in across the clip. Stronger when a face is found
+(`1.04 → 1.14`) than when it isn't (`1.02 → 1.07`), and the crop window stays
+biased toward the speaker. Implemented with `scale` + `crop` and time
+expressions rather than `zoompan`, which has long-standing framerate bugs.
+
+**Music bed.** Synthesised from oscillators — there is no audio file in this
+repo, so nothing to license. Six moods (`upbeat`, `funny`, `chill`,
+`documentary`, `tense`, `none`), each with its own tempo, progression, drum
+pattern and brightness. The bed is **sidechain-compressed against the voice**,
+so it ducks under speech and swells in the gaps with no manual mixing.
+
+Drop your own tracks in `assets/music/` and they are used instead.
+
+**Auto SFX.** Short comedy hits — brass stab, drum roll, pop, slide, womp —
+placed automatically on the *same* detected peaks that scored each clip. At
+most two per clip, never in the first two seconds, spaced apart. This is the
+open-source equivalent of OpusClip's Auto SFX.
+
+**Clip length bands**, mirroring OpusClip's dropdown:
+
+`Auto` · `10–30s` · `15–60s` · `30–90s` · `1–3m`
+
+**Hook headline** (opt-in, off by default — OpusClip also disables it by default
+on API projects): a short hook pulled from the clip's own opening words, faded
+over the first few seconds.
+
+---
+
 ## The idea
 
 Every other open-source clipper does the same thing: transcribe the whole video,
@@ -187,18 +236,23 @@ momentclip/
 ├─ candidates.py   boundary generation, complete-thought filtering
 ├─ momentgraph.py  the graph; Graphify when present, networkx otherwise
 ├─ rank.py         deterministic scoring + optional LLM judge + MMR selection
-├─ render.py       cut, speaker-aware reframe, caption burn. no watermark. ever.
-├─ captions.py     .srt always, styled karaoke .ass when we have word timings
+├─ render.py       cut, auto-zoom reframe, caption burn, music + SFX mix.
+│                   no watermark. ever.
+├─ captions.py     6 animated ASS presets, .srt sidecars, headline overlay
+├─ soundtrack.py   synthesised music beds + comedy stingers (no audio assets)
 ├─ asr.py          faster-whisper with an HTTP fallback; never raises
 ├─ pipeline.py     the orchestration
 ├─ server.py       FastAPI
 └─ web/            the UI (no build step)
 tools/
-├─ make_fixture.py       synthesises a tone video with known planted moments
-├─ make_speech_fixture.ps1  real spoken audio via Windows TTS (tests the ASR path)
-├─ selftest.py           the detector must find those planted moments
-├─ e2e_test.py           full pipeline, asserts clips render and stay watermark-free
-└─ test_transcript.py    ASR, word alignment, karaoke captions, burned output
+├─ make_fixture.py  synthesises a tone video with known planted moments
+├─ make_speech_fixture.ps1  real spoken audio via Windows TTS
+├─ selftest.py      the detector must find those planted moments
+├─ e2e_test.py      full pipeline, asserts clips render and stay watermark-free
+├─ test_transcript.py     ASR, word alignment, karaoke captions
+└─ test_render_features.py  zoom, caption presets, music, SFX
+assets/
+└─ music/        drop your own tracks here (optional)
 ```
 
 ---

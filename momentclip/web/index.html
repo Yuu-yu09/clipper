@@ -54,6 +54,15 @@
         </div>
       </div>
       <div class="opt">
+        <label>Clip length</label>
+        <div class="segmented" id="clen">
+          <button data-v="auto" class="on">Auto</button>
+          <button data-v="10-30">10–30s</button>
+          <button data-v="15-60">15–60s</button>
+          <button data-v="30-90">30–90s</button>
+        </div>
+      </div>
+      <div class="opt">
         <label>Aspect</label>
         <div class="segmented" id="aspect">
           <button data-v="9:16" class="on">9:16</button>
@@ -65,14 +74,31 @@
       <div class="opt">
         <label>Caption style</label>
         <div class="segmented" id="cstyle">
+          <button data-v="hormozi">🟡 Hormozi</button>
           <button data-v="pop" class="on">Pop</button>
+          <button data-v="gradient">Gradient</button>
+          <button data-v="boxed">Boxed</button>
           <button data-v="clean">Clean</button>
           <button data-v="podcast">Podcast</button>
           <button data-v="none">Off</button>
         </div>
       </div>
+      <div class="opt">
+        <label>Background music <em id="musicnote"></em></label>
+        <div class="segmented" id="mood">
+          <button data-v="upbeat" class="on">Upbeat</button>
+          <button data-v="funny">Funny</button>
+          <button data-v="chill">Chill</button>
+          <button data-v="documentary">Docu</button>
+          <button data-v="tense">Tense</button>
+          <button data-v="none">Off</button>
+        </div>
+      </div>
       <div class="opt switches">
         <label class="sw"><input type="checkbox" id="reframe" checked /><span>Auto-reframe to speaker</span></label>
+        <label class="sw"><input type="checkbox" id="autozoom" checked /><span>Auto-zoom / Ken Burns</span></label>
+        <label class="sw"><input type="checkbox" id="sfx" checked /><span>Auto SFX on big moments</span></label>
+        <label class="sw"><input type="checkbox" id="hook" /><span>Add hook headline <em>off by default</em></span></label>
         <label class="sw"><input type="checkbox" id="usegraph" checked /><span>Moment graph</span></label>
         <label class="sw"><input type="checkbox" id="usellm" checked /><span>LLM judge <em id="llmnote"></em></span></label>
       </div>

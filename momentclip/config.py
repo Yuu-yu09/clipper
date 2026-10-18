@@ -57,11 +57,24 @@ class Config:
     )
 
     # --- clip shape -----------------------------------------------------
-    min_clip: float = field(default_factory=lambda: _env_float("CLIPPER_MIN_CLIP", 15.0))
+    # OpusClip's UI offers Auto / short / medium / long bands rather than a
+    # single number. CLIP_LENGTH maps to one of these.
+    min_clip: float = field(default_factory=lambda: _env_float("CLIPPER_MIN_CLIP", 10.0))
     max_clip: float = field(default_factory=lambda: _env_float("CLIPPER_MAX_CLIP", 90.0))
     max_clips: int = field(default_factory=lambda: _env_int("CLIPPER_MAX_CLIPS", 10))
     pad_before: float = field(default_factory=lambda: _env_float("CLIPPER_PAD_BEFORE", 1.2))
     pad_after: float = field(default_factory=lambda: _env_float("CLIPPER_PAD_AFTER", 1.8))
+
+    # --- auto zoom / motion --------------------------------------------
+    auto_zoom: bool = field(default_factory=lambda: _env_bool("CLIPPER_AUTO_ZOOM", True))
+
+    # --- music + sfx -----------------------------------------------------
+    music: str = field(default_factory=lambda: os.getenv("CLIPPER_MUSIC", "upbeat"))
+    music_gain: float = field(default_factory=lambda: _env_float("CLIPPER_MUSIC_GAIN", 0.16))
+    auto_sfx: bool = field(default_factory=lambda: _env_bool("CLIPPER_AUTO_SFX", True))
+
+    # --- headline -------------------------------------------------------
+    auto_hook: bool = field(default_factory=lambda: _env_bool("CLIPPER_AUTO_HOOK", False))
 
     # --- optional LLM judge (OpenAI-compatible) -------------------------
     llm_base_url: str | None = field(default_factory=lambda: os.getenv("CLIPPER_LLM_BASE_URL"))
@@ -106,6 +119,28 @@ class Config:
 
 
 _config: Config | None = None
+
+# Clip-length bands, mirroring OpusClip's dropdown. (min, max, label)
+CLIP_LENGTHS: list[tuple[float, float, str]] = [
+    (10.0, 30.0, "Short  10–30s"),
+    (15.0, 60.0, "Medium  15–60s"),
+    (30.0, 90.0, "Long  30–90s"),
+    (60.0, 180.0, "Long-form  1–3m"),
+]
+
+
+def resolve_clip_length(name: str) -> tuple[float, float]:
+    """Map a UI clip-length band name to (min, max). 'auto' uses the defaults."""
+    if not name or name == "auto":
+        return 10.0, 90.0
+    for lo, hi, label in CLIP_LENGTHS:
+        if name in (label, lo, f"{int(lo)}-{int(hi)}", f"{int(lo)}-{int(hi)}s"):
+            return lo, hi
+    try:
+        lo_s, _, hi_s = name.partition("-")
+        return float(lo_s), float(hi_s.rstrip("s"))
+    except ValueError:
+        return 10.0, 90.0
 
 
 def get_config() -> Config:

@@ -17,8 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import asr, captions, ffmpeg, momentgraph, pipeline, rank, render
-from .config import get_config
+from . import asr, captions, ffmpeg, momentgraph, pipeline, rank, render, soundtrack
+from .config import CLIP_LENGTHS, get_config
 from .jobs import get_manager
 
 logging.basicConfig(
@@ -78,15 +78,22 @@ def health() -> dict:
         "graph_backend": "graphify" if momentgraph.graphify_available() else "networkx",
         "libass": ffmpeg.has_libass(cfg),
         "opencv": render._load_cv2() is not False,
+        "face_tracking": render.face_tracking_available(),
         "yt_dlp": shutil.which("yt-dlp") is not None,
         "llm_configured": cfg.has_llm,
         "watermark": False,
         "aspects": list(render.ASPECTS),
         "personas": list(rank.PERSONAS),
         "caption_presets": list(captions.PRESETS),
+        "clip_lengths": [{"min": lo, "max": hi, "label": lbl}
+                         for lo, hi, lbl in CLIP_LENGTHS],
+        "moods": list(soundtrack.MOODS),
+        "user_music": [p.name for p in soundtrack.user_tracks(cfg)],
         "defaults": {
             "min_clip": cfg.min_clip, "max_clip": cfg.max_clip,
             "max_clips": cfg.max_clips,
+            "music": cfg.music, "auto_zoom": cfg.auto_zoom,
+            "auto_sfx": cfg.auto_sfx, "auto_hook": cfg.auto_hook,
         },
     }
 
@@ -101,8 +108,13 @@ async def create_job(
     persona: str = Form(default="general"),
     aspect: str = Form(default="9:16"),
     caption_style: str = Form(default="pop"),
+    clip_length: str = Form(default="auto"),
     captions_on: bool = Form(default=True),
     reframe: bool = Form(default=True),
+    auto_zoom: bool = Form(default=True),
+    music: str = Form(default="upbeat"),
+    auto_sfx: bool = Form(default=True),
+    auto_hook: bool = Form(default=False),
     use_llm: bool = Form(default=True),
     use_graph: bool = Form(default=True),
     max_clips: int | None = Form(default=None),
@@ -160,15 +172,20 @@ async def create_job(
         result = pipeline.run(
             src, jobdir / "work", jobdir / "clips",
             persona=persona, aspect=aspect, caption_style=caption_style,
-            burn_captions=captions_on, reframe=reframe,
+            clip_length=clip_length,
+            burn_captions=captions_on, reframe=reframe, auto_zoom=auto_zoom,
+            music=music, auto_sfx=auto_sfx, auto_hook=auto_hook,
             use_llm=use_llm, use_graph=use_graph,
             cfg=cfg, progress=progress,
         )
         result["job_id"] = job_id
         result["options"] = {
             "persona": persona, "aspect": aspect,
-            "caption_style": caption_style, "captions": captions_on,
-            "reframe": reframe, "use_llm": use_llm, "use_graph": use_graph,
+            "caption_style": caption_style, "clip_length": clip_length,
+            "captions": captions_on, "reframe": reframe,
+            "auto_zoom": auto_zoom, "music": music, "auto_sfx": auto_sfx,
+            "auto_hook": auto_hook,
+            "use_llm": use_llm, "use_graph": use_graph,
             "max_clips": max_clips or cfg.max_clips,
         }
         (jobdir / "result.json").write_text(

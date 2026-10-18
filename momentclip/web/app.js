@@ -41,13 +41,18 @@
     return on ? on.dataset.v : null;
   };
   wire("#persona", () => {});
+  wire("#clen", () => {});
   wire("#aspect", () => {});
   wire("#cstyle", () => {});
+  wire("#mood", () => {});
 
   // -------------------------------------------------------------- drop
   const drop = $("#drop");
   const fileInput = $("#file");
-  drop.addEventListener("click", () => fileInput.click());
+  // NOTE: no click handler here on purpose. #drop is a <label> wrapping the
+  // input, so the browser already forwards clicks to it -- adding
+  // fileInput.click() opened the file dialog a SECOND time, which looked
+  // like a dead upload button.
   ["dragenter", "dragover"].forEach((e) =>
     drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((e) =>
@@ -74,7 +79,7 @@
         cap("ffmpeg", c.ffmpeg),
         cap("transcribe", c.transcription.faster_whisper || c.transcription.http),
         cap("captions", c.libass),
-        cap("face track", c.opencv),
+        cap("face track", c.face_tracking ?? c.opencv),
         cap("yt-dlp", c.yt_dlp),
         cap("no watermark", c.watermark === false),
       ].join("");
@@ -87,9 +92,21 @@
       if (!c.opencv) {
         $("#reframe").checked = false;
         $("#reframe").disabled = true;
+      } else if (c.face_tracking === false) {
+        $("#reframe").checked = false;
+        $("#reframe").disabled = true;
+        showErr("OpenCV is installed but ships no face cascade (OpenCV 5 dropped it).\n" +
+                "Speaker-aware reframing is off. Fix with:\n" +
+                "  pip install \"opencv-python-headless<5\"\n" +
+                "Auto-zoom and everything else still work.");
       }
       $("#usellm").disabled = !c.llm_configured;
       $("#llmnote").textContent = c.llm_configured ? "" : "(not configured — heuristic only)";
+      if (c.user_music?.length) {
+        $("#musicnote").textContent = `· ${c.user_music.length} of your tracks found`;
+      } else {
+        $("#musicnote").textContent = "· synthesised";
+      }
     } catch (e) {
       $("#caps").innerHTML = `<span class="cap off">✕ server unreachable</span>`;
     }
@@ -111,11 +128,16 @@
     if (file) fd.append("file", file);
     if (url) fd.append("url", url);
     fd.append("persona", pick("#persona"));
+    fd.append("clip_length", pick("#clen"));
     fd.append("aspect", pick("#aspect"));
+    fd.append("music", pick("#mood"));
     const cs = pick("#cstyle");
     fd.append("caption_style", cs === "none" ? "clean" : cs);
     fd.append("captions_on", String(cs !== "none"));
     fd.append("reframe", String($("#reframe").checked));
+    fd.append("auto_zoom", String($("#autozoom").checked));
+    fd.append("auto_sfx", String($("#sfx").checked));
+    fd.append("auto_hook", String($("#hook").checked));
     fd.append("use_graph", String($("#usegraph").checked));
     fd.append("use_llm", String($("#usellm").checked));
 

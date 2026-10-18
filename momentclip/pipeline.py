@@ -8,13 +8,14 @@ import hashlib
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 
-from . import asr, captions, candidates, ffmpeg, momentgraph, rank, render, signals
-from .config import Config, get_config
+from . import asr, captions, candidates, ffmpeg, momentgraph, rank, render, signals, soundtrack
+from .config import Config, get_config, resolve_clip_length
+from .soundtrack import MixSpec
 
 log = logging.getLogger("momentclip.pipeline")
 
@@ -38,6 +39,9 @@ class ClipResult:
     render_notes: list[str] = field(default_factory=list)
     features: dict = field(default_factory=dict)
     graph_reasons: list[str] = field(default_factory=list)
+    music: str | None = None
+    sfx: list[str] = field(default_factory=list)
+    zoom: float = 1.0
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +58,9 @@ class ClipResult:
             "render_notes": self.render_notes,
             "features": {k: round(v, 4) for k, v in self.features.items()},
             "graph_reasons": self.graph_reasons,
+            "music": self.music,
+            "sfx": self.sfx,
+            "zoom": self.zoom,
         }
 
 
@@ -69,6 +76,10 @@ class AnalysisResult:
     graph: dict
     signals: dict
     has_llm: bool
+    # kept for the renderer so SFX can be placed on the same peaks that
+    # scored the clip in the first place
+    event_list: list = field(default_factory=list)
+    track: dict = field(default_factory=dict)
 
 
 def download(url: str, dest_dir: Path, cfg: Config) -> Path:
@@ -109,12 +120,18 @@ def analyse(
     persona: str = "general",
     use_llm: bool = True,
     use_graph: bool = True,
+    min_clip: float | None = None,
+    max_clip: float | None = None,
     cfg: Config | None = None,
     progress=None,
 ) -> tuple[AnalysisResult, list[rank.Ranked]]:
     cfg = cfg or get_config()
     source = Path(source)
     workdir.mkdir(parents=True, exist_ok=True)
+
+    if min_clip is not None or max_clip is not None:
+        cfg = replace(cfg, min_clip=min_clip if min_clip is not None else cfg.min_clip,
+                      max_clip=max_clip if max_clip is not None else cfg.max_clip)
 
     def step(pct: int, msg: str) -> None:
         log.info("[%3d%%] %s", pct, msg)
@@ -198,6 +215,8 @@ def analyse(
             if len(track.get("rms_db", [])) else None,
         },
         has_llm=cfg.has_llm,
+        event_list=events,
+        track=track,
     )
     return result, ranked
 
@@ -233,6 +252,13 @@ def export(
     caption_style: str = "pop",
     burn_captions: bool = True,
     reframe: bool = True,
+    auto_zoom: bool = True,
+    music_mood: str = "upbeat",
+    music_gain: float = 0.16,
+    auto_sfx: bool = True,
+    auto_hook: bool = False,
+    track: dict | None = None,
+    events: list | None = None,
     cfg: Config | None = None,
     progress=None,
 ) -> list[ClipResult]:
@@ -240,6 +266,7 @@ def export(
     outdir.mkdir(parents=True, exist_ok=True)
     results: list[ClipResult] = []
     total = len(ranked)
+    events = events or []
 
     for i, r in enumerate(ranked, 1):
         m = r.moment
@@ -248,23 +275,52 @@ def export(
             progress(pct, f"rendering clip {i}/{total}")
 
         dest = outdir / f"clip_{m.id}.mp4"
+
+        # --- audio: music bed + comedy SFX placed on this clip's peaks ---
+        mix = soundtrack.MixSpec(music_gain=music_gain, duck=True)
+        sfx: list[tuple[float, str]] = []
+        if music_mood and music_mood != "none":
+            bed = soundtrack.build_music(m.end - m.start, music_mood, cfg,
+                                         workdir=outdir / "_music")
+            mix.music = bed
+        if auto_sfx and events:
+            inside = [e for e in events if e.start < m.end and e.end > m.start]
+            local = [type("E", (), {"start": e.start - m.start, "end": e.end - m.start,
+                                    "kind": e.kind, "strength": e.strength})()
+                     for e in inside]
+            sfx = soundtrack.pick_stingers(local, m.end - m.start, limit=2)
+            paths = []
+            for _off, kind in sfx:
+                sp = outdir / "_music" / f"sfx_{kind}_{m.id}.wav"
+                soundtrack.generate_stinger(kind, sp)
+                paths.append(sp)
+            mix.stinger_paths = paths
+
+        headline = ""
+        if auto_hook and m.text:
+            headline = _hook_line(m.text)
+
         try:
             res = render.render_clip(
                 source, m.start, m.end, dest,
                 words=m.words, aspect=aspect, caption_style=caption_style,
-                want_captions=burn_captions, want_reframe=reframe, cfg=cfg,
+                headline=headline,
+                want_captions=burn_captions, want_reframe=reframe,
+                want_zoom=auto_zoom,
+                music=mix if mix.music else None, stingers=sfx if sfx else None,
+                cfg=cfg,
             )
-            video_rel = str(dest)
             srt = dest.with_suffix(".srt")
             results.append(ClipResult(
                 id=m.id, start=m.start, end=m.end, duration=res.duration,
                 score=r.final_score, reason=r.reason, tag=m.tag, text=m.text,
-                video=video_rel,
+                video=str(dest),
                 captions=str(srt) if srt.exists() else None,
                 render_notes=res.notes,
                 features={**r.subscores, **{k: v for k, v in m.features.items()
                                            if k.startswith(("graph_", "lexical_"))}},
                 graph_reasons=m.graph_reasons,
+                music=res.music, sfx=res.sfx, zoom=res.zoom,
             ))
         except Exception as exc:  # noqa: BLE001
             log.warning("clip %s render failed: %s", m.id, exc)
@@ -280,6 +336,15 @@ def export(
     return results
 
 
+def _hook_line(text: str, max_words: int = 7) -> str:
+    """Pull a short hook from the clip's own opening words."""
+    words = text.split()
+    for n in (max_words, 6, 5, 4, 3):
+        if len(words) >= n:
+            return " ".join(words[:n])
+    return " ".join(words)
+
+
 def run(
     source: str | Path,
     workdir: Path,
@@ -288,8 +353,14 @@ def run(
     persona: str = "general",
     aspect: str = "9:16",
     caption_style: str = "pop",
+    clip_length: str = "auto",
     burn_captions: bool = True,
     reframe: bool = True,
+    auto_zoom: bool = True,
+    music: str = "upbeat",
+    music_gain: float = 0.16,
+    auto_sfx: bool = True,
+    auto_hook: bool = False,
     use_llm: bool = True,
     use_graph: bool = True,
     cfg: Config | None = None,
@@ -297,13 +368,24 @@ def run(
 ) -> dict:
     t0 = time.time()
     cfg = cfg or get_config()
+
+    lo, hi = resolve_clip_length(clip_length)
+    lo = max(cfg.min_clip, lo)
+    hi = max(lo, min(cfg.max_clip if clip_length == "auto" else hi, cfg.max_clip))
+
     analysis, ranked = analyse(
         source, workdir, persona=persona, use_llm=use_llm,
         use_graph=use_graph, cfg=cfg, progress=progress,
+        min_clip=lo, max_clip=hi,
     )
     clips = export(
         ranked, source, outdir, aspect=aspect, caption_style=caption_style,
-        burn_captions=burn_captions, reframe=reframe, cfg=cfg, progress=progress,
+        burn_captions=burn_captions, reframe=reframe, auto_zoom=auto_zoom,
+        music_mood=music, music_gain=music_gain, auto_sfx=auto_sfx,
+        auto_hook=auto_hook,
+        track=getattr(analysis, "track", None),
+        events=getattr(analysis, "event_list", None),
+        cfg=cfg, progress=progress,
     )
     return {
         "analysis": {
@@ -317,6 +399,7 @@ def run(
             "graph": analysis.graph,
             "signals": analysis.signals,
             "has_llm": analysis.has_llm,
+            "clip_length": [lo, hi],
         },
         "clips": [c.to_dict() for c in clips],
         "elapsed_seconds": round(time.time() - t0, 2),

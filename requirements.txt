@@ -26,7 +26,8 @@ networkx>=3.0
 #     pip install "av<19" faster-whisper
 
 # --- reframe (speaker-aware cropping) ---
-# opencv-python>=4.9         # bundled Haar face detector; falls back to centre crop
+# opencv-python>=4.9   <5        # 4.x bundles the Haar cascade; 5.0 dropped it
+# opencv-python-headless>=4.9,<5 # headless variant, same pin
 
 # --- read the docs PDF offline (nice-to-have, not required) ---
 # pypdf>=4.0
