@@ -178,6 +178,28 @@ and a punch-in on high-tension beats — deaths, betrayals, revelations. Music
 runs the whole episode, adapted per episode so the arc escalates, with
 stingers on the tense beats.
 
+### How fast is it
+
+Measured on a six-episode season, 110 s of output at 1080×1920, 12 cores:
+
+| | wall clock | vs realtime |
+|---|---|---|
+| original | 66.6 s | 1.65× |
+| shots and episodes rendered in parallel | 42.4 s | 2.59× |
+| concat by stream copy instead of re-encode | **28.1 s** | **3.92×** |
+
+Shots share nothing with each other, and episodes share nothing with each
+other, so both levels fan out across cores. The two cannot each take the whole
+budget — ten episodes each spawning six ffmpegs would thrash — so the cores are
+split, with two deliberately left free so the machine stays responsive.
+
+The concat step remuxes rather than re-encoding, since every shot is already
+H.264 at identical settings; re-encoding was paying for a second full
+generation pass and discarding quality that had just been computed. The
+re-encode remains as a fallback.
+
+`max_workers` overrides all of it if you are on a small machine.
+
 ### What this is not
 
 This is a **motion storyboard**: the frame moves around a still, the
@@ -528,6 +550,13 @@ python tools\e2e_test.py
 # 3. transcript path — needs REAL words, so it uses Windows TTS
 powershell -File tools\make_speech_fixture.ps1
 python tools\test_transcript.py
+
+# 4. the static UI contract (needs node for the parse check)
+python tools\test_web.py
+
+# 5. the real thing, over HTTP, against a running engine
+python run.py --no-browser
+python tools\e2e_http.py --video fixtures\test_speech.mp4
 ```
 
 | Suite | Covers | Needs |
@@ -535,12 +564,32 @@ python tools\test_transcript.py
 | `selftest.py` | 5 planted signal events must each be detected | `make_fixture.py` output |
 | `e2e_test.py` | graph, ranking, render, 9:16 geometry, no overlay | fixture 1 |
 | `test_transcript.py` | ASR, word-timestamp integrity, word-aligned cuts, karaoke `.ass`, burned captions | fixture 3 |
+| `test_prompt.py` | free-text prompt compilation, and that it actually reorders clips | fixture 3 |
+| `test_render_features.py` | adaptive music key selection, stingers, zoom expression | — |
+| `test_web.py` | the JavaScript parses; the DOM contract between `app.js` and `index.html` | node, for the parse |
+| `test_story.py` | season planning and storyboard assembly, plus the filtergraph guard | — |
+| `e2e_http.py` | **the real thing over HTTP** — multipart upload, polling, artefacts, 404 paths, traversal | a running engine |
+| `static_host.py` | serves the UI with *no* backend, to test the deployed-UI case | — |
 | `run.py --check` | reports which optional backends are live | — |
 
 `selftest.py` is the important one: it plants a laughter burst, an energy shock,
 a pitch sweep, a silent beat and an overlapping-voice section at known
 timestamps, then asserts the detector finds each. Thresholds in `signals.py`
 are tuned to keep it at 5/5 — if a tweak breaks the detector, this fails.
+
+`e2e_http.py` is the one that finds what the others cannot. Every other suite
+calls Python functions directly, so nothing exercised multipart upload, CORS,
+job polling, the static-file mount or the 404 paths. It found four real bugs
+on its first run — see [BUGS.md](BUGS.md).
+
+Two tests exist because a test that cannot fail is worse than no test:
+
+- `test_web.py` runs `node --check` on `app.js`. It was added after a
+  duplicate `let` made the entire UI script fail to parse, so every control on
+  the deployed page was inert while the page still looked perfect.
+- `e2e_http.py` asserts the transcript has words, and skips the `.srt` check
+  when it does not. It originally ran against a silent fixture, so every
+  caption assertion was passing vacuously.
 
 Fixture 3 exists because the tone fixture has **no recognisable speech by
 design**, so whisper correctly reports "no speech" on it. Testing the ASR and
