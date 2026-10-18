@@ -34,6 +34,24 @@ header {
 h1 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
 .tagline { margin: 2px 0 0; color: var(--dim); font-size: 13.5px; }
 
+.headright { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.gear {
+  background: transparent; border: 1px solid var(--line); color: var(--dim);
+  padding: 5px 11px; border-radius: 999px; font-size: 12px; cursor: pointer;
+}
+.gear:hover { color: var(--text); border-color: var(--accent); }
+.enginepanel {
+  max-width: 1120px; margin: 0 auto; padding: 14px 28px 0;
+}
+.enginepanel > label { font-size: 12px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: 0.06em; }
+.enginerow { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+.enginerow input[type=url] { flex: 1; min-width: 260px; }
+.enginerow button {
+  padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent);
+  background: var(--accent); color: #fff; font-size: 13px; cursor: pointer;
+}
+
 .caps { display: flex; gap: 6px; flex-wrap: wrap; max-width: 460px; justify-content: flex-end; }
 .cap {
   font-size: 11px; padding: 4px 9px; border-radius: 999px;

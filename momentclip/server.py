@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (asr, captions, ffmpeg, momentgraph, pipeline, prompt, providers,
                rank, render, soundtrack, vision)
-from .config import CLIP_LENGTHS, get_config
+from .config import CLIP_LENGTHS, get_config, is_serverless
 from .jobs import get_manager
 
 logging.basicConfig(
@@ -32,6 +32,20 @@ log = logging.getLogger("momentclip.server")
 
 cfg = get_config()
 cfg.ensure_dirs()
+
+# Running on Vercel/Lambda/Workers means the UI can be served but the engine
+# cannot actually clip: no ffmpeg, no disk that survives the request, and a
+# short execution ceiling. Say that once, loudly, instead of failing later.
+SERVERLESS = is_serverless()
+SERVERLESS_NOTE = (
+    "This deployment can serve the interface but cannot process video.\n"
+    "Serverless functions have no ffmpeg, no persistent disk and a short\n"
+    "execution limit, which is exactly what the engine needs.\n\n"
+    "To use it: run the engine somewhere with a real filesystem --\n"
+    "  python run.py           (this machine)\n"
+    "then open the interface and click the gear icon to point it at\n"
+    "http://127.0.0.1:8000"
+)
 
 app = FastAPI(
     title="Clipper",
@@ -83,6 +97,9 @@ def health() -> dict:
         "face_tracking": render.face_tracking_available(),
         "yt_dlp": shutil.which("yt-dlp") is not None,
         "llm_configured": cfg.has_llm,
+        "serverless": SERVERLESS,
+        "can_process": not SERVERLESS,
+        "note": SERVERLESS_NOTE if SERVERLESS else "",
         "watermark": False,
         "aspects": list(render.ASPECTS),
         "personas": list(rank.PERSONAS),
@@ -139,6 +156,11 @@ async def create_job(
 ) -> dict:
     if file is None and not (url or "").strip():
         raise HTTPException(400, "provide either a video file or a url")
+
+    if SERVERLESS:
+        # Fail fast and legibly. A 20 GB upload to a function that cannot keep
+        # a disk or run ffmpeg for ten minutes is not a useful thing to accept.
+        raise HTTPException(503, f"Engine unavailable on this deployment.\n{SERVERLESS_NOTE}")
 
     persona = persona if persona in ("funny", "candid", "surprising", "general") else "general"
     aspect = aspect if aspect in render.ASPECTS else "9:16"

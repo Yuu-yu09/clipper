@@ -134,6 +134,21 @@ class Config:
 
 _config: Config | None = None
 
+# Serverless markers: Vercel, AWS Lambda, Cloudflare Workers, Fly, Render's
+# serverless mode. The engine needs ffmpeg, a writable disk that survives the
+# request, and minutes of uninterrupted CPU. None of these provide any of it,
+# so we detect them and say so rather than failing obscurely mid-render.
+_SERVERLESS_MARKS = ("VERCEL", "AWS_LAMBDA_FUNCTION_NAME", "CF_PAGES",
+                     "NETLIFY", "KVERCEL")
+
+
+def is_serverless() -> bool:
+    import os
+    if any(os.getenv(k) for k in _SERVERLESS_MARKS):
+        return True
+    # Vercel and friends mount the bundle read-only at /var/task
+    return os.path.isdir("/var/task") and not os.access("/var/task", os.W_OK)
+
 # Clip-length bands, mirroring OpusClip's dropdown. (min, max, label)
 CLIP_LENGTHS: list[tuple[float, float, str]] = [
     (10.0, 30.0, "Short  10–30s"),

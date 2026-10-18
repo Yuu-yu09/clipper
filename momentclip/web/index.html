@@ -16,8 +16,25 @@
       <p class="tagline">Long video in. The funny, candid and surprising parts out. No watermark, ever.</p>
     </div>
   </div>
-  <div id="caps" class="caps"></div>
+  <div class="headright">
+    <button id="engine" class="gear" title="Where the processing engine lives">⚙ engine</button>
+    <div id="caps" class="caps"></div>
+  </div>
 </header>
+
+<div id="enginepanel" class="enginepanel hidden">
+  <label for="engineurl">Processing engine</label>
+  <div class="enginerow">
+    <input type="url" id="engineurl" placeholder="http://127.0.0.1:8000" />
+    <button id="enginesave">Save</button>
+    <button id="engineclear" class="link">use same origin</button>
+  </div>
+  <p class="hint">
+    The UI is static and hosts anywhere. The engine needs ffmpeg, OpenCV and
+    faster-whisper, so it runs on a machine (or Railway / Render / a VPS /
+    Hugging Face Spaces), not on Vercel. Point this at wherever yours runs.
+  </p>
+</div>
 
 <main>
   <!-- ---------------- intake ---------------- -->
@@ -145,6 +162,7 @@
   <span>Free &amp; open source · runs entirely on your machine · <strong>no watermark</strong></span>
 </footer>
 
+<script src="/config.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

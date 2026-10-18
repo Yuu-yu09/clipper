@@ -14,6 +14,37 @@
     String(s ?? "").replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // ---------- where the engine lives ----------
+  // The UI is static and can be hosted on Vercel/Netlify/Pages; the engine
+  // cannot. Every call goes through api() so the two can be deployed apart.
+  const API_KEY = "clipper.engine";
+  function engineBase() {
+    const saved = localStorage.getItem(API_KEY);
+    if (saved !== null) return saved.replace(/\/+$/, "");
+    const cfg = (typeof window.CLIPPER_API === "string" ? window.CLIPPER_API : "").replace(/\/+$/, "");
+    return cfg;
+  }
+  function api(path) { return engineBase() + path; }
+
+  function setupEnginePanel() {
+    const panel = $("#enginepanel");
+    const input = $("#engineurl");
+    $("#engine").addEventListener("click", () => {
+      panel.classList.toggle("hidden");
+      if (!panel.classList.contains("hidden")) input.value = engineBase();
+    });
+    $("#enginesave").addEventListener("click", () => {
+      localStorage.setItem(API_KEY, input.value.trim().replace(/\/+$/, ""));
+      panel.classList.add("hidden");
+      loadCaps();
+    });
+    $("#engineclear").addEventListener("click", () => {
+      localStorage.setItem(API_KEY, "");
+      panel.classList.add("hidden");
+      loadCaps();
+    });
+  }
+
   let pollTimer = null;
   let currentJob = null;
 
@@ -137,7 +168,7 @@
     prevBox.style.cssText =
       "position:fixed;z-index:99;pointer-events:none;box-shadow:0 12px 40px #000a;border-radius:12px;overflow:hidden";
     const v = document.createElement("video");
-    v.src = `/api/preview/caption.mp4?style=${encodeURIComponent(name)}`;
+    v.src = api(`/api/preview/caption.mp4?style=${encodeURIComponent(name)}`);
     v.muted = true; v.loop = true; v.playsInline = true;
     v.style.cssText = "width:220px;display:block";
     prevBox.appendChild(v);
@@ -180,8 +211,8 @@
     const box = $("#promptinfo");
     if (!text) { box.innerHTML = ""; return; }
     try {
-      const r = await (await fetch("/api/preview/prompt?text=" +
-        encodeURIComponent(text))).json();
+      const r = await (await fetch(api("/api/preview/prompt?text=" +
+        encodeURIComponent(text)))).json();
       const bits = [];
       if (r.keywords?.length) bits.push(`topics <span class="ok">${esc(r.keywords.join(", "))}</span>`);
       if (r.sentiments?.length) bits.push(`mood <span class="ok">${esc(r.sentiments.join(", "))}</span>`);
@@ -225,7 +256,7 @@
   // ---------------------------------------------------------- caps bar
   async function loadCaps() {
     try {
-      const c = await (await fetch("/api/health")).json();
+      const c = await (await fetch(api("/api/health"))).json();
       const cap = (label, ok) =>
         `<span class="cap ${ok ? "on" : "off"}">${ok ? "✓" : "✕"} ${esc(label)}</span>`;
       $("#caps").innerHTML = [
@@ -237,6 +268,19 @@
         cap("yt-dlp", c.yt_dlp),
         cap("no watermark", c.watermark === false),
       ].join("");
+
+      // A serverless deploy can serve this page but cannot clip. Say so up
+      // front instead of letting someone upload 2 GB and wonder.
+      if (c.serverless || c.can_process === false) {
+        $("#go").disabled = true;
+        showErr(
+          "This deployment can show the interface but cannot process video.\n\n" +
+          (c.note || "Serverless platforms have no ffmpeg and no persistent disk.")
+        );
+        $("#enginepanel").classList.remove("hidden");
+        $("#engineurl").value = engineBase();
+        return;
+      }
       if (!c.ffmpeg) {
         showErr("FFmpeg was not found. Install it and restart the server:\n  winget install Gyan.FFmpeg\nor set FFMPEG_BIN / FFPROBE_BIN to absolute paths.");
       }
@@ -304,7 +348,7 @@
   // ------------------------------------------------------------- submit
   $("#go").addEventListener("click", start);
   $("#cancel").addEventListener("click", async () => {
-    if (currentJob) await fetch(`/api/jobs/${currentJob}/cancel`, { method: "POST" });
+    if (currentJob) await fetch(api(`/api/jobs/${currentJob}/cancel`), { method: "POST" });
   });
 
   async function start() {
@@ -339,7 +383,7 @@
     setProgress(1, "uploading…");
 
     try {
-      const res = await fetch("/api/jobs", { method: "POST", body: fd });
+      const res = await fetch(api("/api/jobs"), { method: "POST", body: fd });
       const data = await readJson(res);
       if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
       currentJob = data.id;
@@ -373,7 +417,7 @@
     clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
       try {
-        const j = await (await fetch(`/api/jobs/${currentJob}`)).json();
+        const j = await (await fetch(api(`/api/jobs/${currentJob}`))).json();
         setProgress(j.progress, j.step);
         if (j.status === "running" || j.status === "queued") return poll();
         $("#go").disabled = false;
@@ -498,5 +542,6 @@
   }
   function hideErr() { $("#err").classList.add("hidden"); }
 
+  setupEnginePanel();
   loadCaps();
 })();
