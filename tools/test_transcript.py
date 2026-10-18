@@ -114,11 +114,15 @@ def main() -> int:
             head = ass.read_text(encoding="utf-8")
             if "Dialogue:" not in head:
                 fails.append("ass has no Dialogue events")
-            # the karaoke override is the literal tag  {\kf1:...
-            if "{\\kf" not in head:
-                fails.append("ass has no karaoke (\\kf) tags")
-            else:
-                print(f"  karaoke tags: {head.count('{\\kf')}")
+            # karaoke timing tag is {\k<centiseconds>; the scale pop is \t(
+            karaoke = head.count("{\\k")
+            pops = head.count("\\t(")
+            print(f"  karaoke tags: {karaoke}   scale-pop tags: {pops}")
+            if karaoke == 0:
+                fails.append("ass has no karaoke (\\k) tags -- "
+                            "captions will not animate word by word")
+            if pops == 0:
+                fails.append("ass has no \\t scale-pop tags")
 
     # ---- full render with burned captions ----
     # Render from a video, not the raw wav -- the reframer needs real frames.

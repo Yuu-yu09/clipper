@@ -65,6 +65,38 @@ over the first few seconds.
 
 ---
 
+## Feature parity
+
+Built against the [OpusClip API reference](https://help.opus.pro/api-reference/overview),
+not against screenshots.
+
+| OpusClip | Clipper | Notes |
+|---|---|---|
+| `curationPref.clipDurations: [[0, 180]]` | `clip_length` bands | Auto · 10–30s · 15–60s · 30–90s · 1–3m |
+| `brandTemplateId: "preset-fancy-Karaoke"` | 6 caption presets | incl. an equivalent karaoke look |
+| `renderPref.layoutAspectRatio` | `aspect` | 9:16 · 1:1 · 4:5 · 16:9 |
+| Subject Tracking | auto-reframe + auto-zoom | Haar face track, median-centred |
+| Auto SFX (Pro+) | `soundtrack.pick_stingers` | 5 synthesised hit types, placed on detected peaks |
+| Add Music | `soundtrack.generate_bed` | synthesised, sidechain-ducked |
+| `enableAutoHook` | `auto_hook` | **off by default here, same as theirs on API** |
+| `range: {startSec, endSec}` | — | not implemented |
+| `genre` | `persona` | funny · candid · surprising · general |
+| `topicKeywords` / `customPrompt` | `ClipAnything`-style prompt | **not implemented** — see below |
+| Virality Score | `rank.py` score | different method, and we show the breakdown |
+| Watermark (lower plans) | **none** | structural guarantee, see `render.py` |
+
+**Not implemented**, and honestly so:
+
+- **`ClipAnything` prompt mode.** Their multimodal model takes a natural-language
+  prompt ("compile all the hilarious moments") over any video type. Clipper's
+  persona selector is a fixed rubric, not free-text. This is the biggest gap.
+- **Filler-word removal** (`enableRemoveFillerWords`). Our word-level ASR has
+  the data for it; it just isn't wired up.
+- **`range`** — clip only a time window of the source.
+- **Social posting / scheduler / collections.** All cloud-account features.
+
+---
+
 ## The idea
 
 Every other open-source clipper does the same thing: transcribe the whole video,
