@@ -14,6 +14,12 @@ python run.py          →  http://127.0.0.1:8000
 Your video never leaves your machine. No account, no subscription, no
 processing-minute cap, no upload to anyone's cloud.
 
+**Hosting it?** The interface is four static files with no build step, so it
+deploys to Vercel, Netlify or GitHub Pages as-is. The engine needs ffmpeg and a
+persistent disk, so it runs on a machine or container rather than on a
+serverless function. The two are configured independently — see
+**[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
 ---
 
 ## The look

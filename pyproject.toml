@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipper"
+version = "0.1.0"
+description = "Free, open-source local video clipper. Finds funny, candid and surprising moments. No watermark, no subscription, no upload."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["video", "clipping", "highlights", "captions", "ffmpeg", "whisper", "transcription"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# Runtime deps only. numpy and networkx are required; everything else in
+# requirements.txt is optional and degrades gracefully -- see README.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    "numpy>=1.24",
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+# Local, free transcription. NOTE the av<19 pin: faster-whisper calls
+# av.open(metadata_errors=...), which PyAV removed in 19.0.
+asr = ["faster-whisper>=1.0", "av<19"]
+# Speaker-aware reframing. 4.x bundles the Haar cascade; 5.0 dropped it.
+vision = ["opencv-python-headless>=4.9,<5"]
+fetch = ["yt-dlp>=2024.1.1"]
+# Graphify, used when installed; networkx is the fallback.
+graph = ["graphifyy"]
+dev = ["pyflakes", "pyright"]
+
+[project.scripts]
+clipper = "run:main"
+
+[tool.setuptools]
+packages = ["momentclip"]
+
+[tool.setuptools.package-data]
+momentclip = ["web/*.html", "web/*.css", "web/*.js"]
+
+# ---------------------------------------------------------------------------
+# Vercel
+# ---------------------------------------------------------------------------
+# The interface is static and deploys anywhere. The engine needs ffmpeg, a
+# persistent disk and minutes of CPU per render -- none of which a serverless
+# function provides -- so it deliberately has NO Vercel entrypoint here.
+#
+# Declaring one is what produced:
+#   [FASTAPI_ENTRYPOINT_NOT_FOUND] No FastAPI entrypoint found in default
+#   locations, but found potential entrypoints: momentclip/server.py
+#
+# vercel.json publishes momentclip/web as a static site instead. Point the
+# interface at an engine with window.CLIPPER_API in web/config.js.
+# See DEPLOYMENT.md.
+
+[tool.pytest.ini_options]
+testpaths = ["tools"]
+
+[tool.pyright]
+include = ["momentclip"]
+pythonVersion = "3.10"
+reportMissingImports = false

@@ -341,7 +341,31 @@
       });
       $("#customprompt").addEventListener("input", onPromptInput);
     } catch (e) {
-      $("#caps").innerHTML = `<span class="cap off">✕ server unreachable</span>`;
+      $("#caps").innerHTML = `<span class="cap off">✕ no engine</span>`;
+      // The most common case for a static deployment: the page loads from a
+      // CDN and there is no engine behind it. That is not an error, it is the
+      // expected state -- so explain how to finish the setup instead of
+      // shouting about a failed request.
+      if (!engineBase()) {
+        $("#go").disabled = true;
+        $("#enginepanel").classList.remove("hidden");
+        $("#engineurl").focus();
+        showErr(
+          "Interface loaded, but there is no processing engine behind it yet.\n\n" +
+          "Clipper's engine needs ffmpeg, OpenCV and faster-whisper, so it runs\n" +
+          "on a machine or container rather than on a static host.\n\n" +
+          "1. Start it where you want the work done:\n" +
+          "     python run.py\n" +
+          "2. Put its address in the box below (for example http://127.0.0.1:8000)\n" +
+          "   and press Save. It is remembered in this browser.\n\n" +
+          "For a hosted engine, set window.CLIPPER_API in config.js instead."
+        );
+      } else {
+        showErr(
+          `Could not reach the engine at ${engineBase()}.\n\n` +
+          "Check it is running, then press Save again."
+        );
+      }
     }
   }
 
