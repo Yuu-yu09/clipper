@@ -26,17 +26,44 @@
 </header>
 
 <div id="enginepanel" class="enginepanel hidden">
-  <label for="engineurl">Processing engine</label>
-  <div class="enginerow">
-    <input type="url" id="engineurl" placeholder="http://127.0.0.1:8000" />
-    <button id="enginesave">Save</button>
-    <button id="engineclear" class="link">use same origin</button>
+  <div class="setup">
+    <h2>Get Clipper running</h2>
+    <p class="lead">
+      Everything happens on your own computer. There is nothing to sign up for,
+      nothing to pay for, and no video is ever uploaded anywhere.
+    </p>
+    <ol class="steps">
+      <li>Copy the line below for your system and paste it into a terminal.</li>
+      <li>It installs everything, starts, and opens your browser here.</li>
+    </ol>
+    <div class="cmdrow">
+      <div class="cmd" id="cmd-mac">
+        <span class="cmdlabel">macOS / Linux</span>
+        <code id="cmd-mac-text"></code>
+        <button class="copybtn" data-copy="cmd-mac-text">copy</button>
+      </div>
+      <div class="cmd" id="cmd-win">
+        <span class="cmdlabel">Windows</span>
+        <code id="cmd-win-text"></code>
+        <button class="copybtn" data-copy="cmd-win-text">copy</button>
+      </div>
+    </div>
+    <p class="hint" id="cmdrepo"></p>
+
+    <details class="advanced">
+      <summary>Already running it somewhere else?</summary>
+      <label class="flabel" for="engineurl">Point this page at it</label>
+      <div class="enginerow">
+        <input type="url" id="engineurl" placeholder="http://127.0.0.1:8000" />
+        <button id="enginesave">Save</button>
+        <button id="engineclear" class="link">use this page's own server</button>
+      </div>
+      <p class="hint">
+        Only needed when the interface and the video work are on different
+        machines — for example on a hosted VPS or a Hugging Face Space.
+      </p>
+    </details>
   </div>
-  <p class="hint">
-    The UI is static and hosts anywhere. The engine needs ffmpeg, OpenCV and
-    faster-whisper, so it runs on a machine (or Railway / Render / a VPS /
-    Hugging Face Spaces), not on Vercel. Point this at wherever yours runs.
-  </p>
 </div>
 
 <main>

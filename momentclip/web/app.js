@@ -75,7 +75,48 @@
         return true;
       }
     } catch { /* not self-serving, fall through */ }
+
+    // Not self-serving: show the install panel, which explains the one-command
+    // setup. The gear button is now redundant -- the panel contains its own
+    // "already running it somewhere else?" disclosure -- so hide it rather than
+    // offering two routes to the same place.
+    $("#engine").classList.add("hidden");
     return false;
+  }
+
+  // The install commands, so nobody has to be told what an engine is.
+  function fillInstallCommands() {
+    const repo = (typeof window.CLIPPER_REPO === "string" && window.CLIPPER_REPO)
+      || "https://github.com/Yuu-yu09/clipper";
+    const m = $("#cmd-mac-text"), w = $("#cmd-win-text"), note = $("#cmdrepo");
+    if (!m || !w) return;
+    // git clone then run, so a first-time user never has to know they need a
+    // working copy before they can start.
+    m.textContent = `git clone ${repo}.git && cd clipper && ./install.sh`;
+    w.textContent = `git clone ${repo}.git && cd clipper && install.bat`;
+    if (note) {
+      note.textContent =
+        `No git? Download ${repo}/archive/refs/heads/main.zip and unzip it, ` +
+        `then run the same command from inside the folder.`;
+    }
+    $$(".copybtn").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const text = document.getElementById(b.dataset.copy).textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          b.textContent = "copied";
+        } catch {
+          // clipboard can be blocked; select the text so it can be copied by hand
+          const r = document.createRange();
+          r.selectNodeContents(document.getElementById(b.dataset.copy));
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(r);
+          b.textContent = "select and copy";
+        }
+        setTimeout(() => { b.textContent = "copy"; }, 2200);
+      })
+    );
   }
 
   // Show the engine controls only when they are the thing that would help.
@@ -381,7 +422,7 @@
       });
       $("#customprompt").addEventListener("input", onPromptInput);
     } catch (e) {
-      $("#caps").innerHTML = `<span class="cap off">✕ no engine</span>`;
+      $("#caps").innerHTML = `<span class="cap off">✕ not running locally</span>`;
       // The most common case for a static deployment: the page loads from a
       // CDN and there is no engine behind it. That is not an error, it is the
       // expected state -- so explain how to finish the setup instead of
@@ -389,16 +430,15 @@
       if (!engineBase()) {
         $("#go").disabled = true;
         $("#enginepanel").classList.remove("hidden");
-        $("#engineurl").focus();
+        // The install panel above the page carries the instructions, with a
+        // copy button. Repeating them here as a wall of red text was the old
+        // behaviour and it read as an error where the state is normal: the
+        // deployed interface is *meant* to be reachable before anything local
+        // is running.
         showErr(
-          "Interface loaded, but there is no processing engine behind it yet.\n\n" +
-          "Clipper's engine needs ffmpeg, OpenCV and faster-whisper, so it runs\n" +
-          "on a machine or container rather than on a static host.\n\n" +
-          "1. Start it where you want the work done:\n" +
-          "     python run.py\n" +
-          "2. Put its address in the box below (for example http://127.0.0.1:8000)\n" +
-          "   and press Save. It is remembered in this browser.\n\n" +
-          "For a hosted engine, set window.CLIPPER_API in config.js instead."
+          "Clipper is running on your own computer, not on this page.\n\n" +
+          "The box above has a one-line command for that. Nothing is paid for, " +
+          "no account is needed, and your video is never uploaded anywhere."
         );
       } else {
         showErr(
@@ -503,14 +543,12 @@
       `   its address in the box (for example ${n}).`;
 
     if (!engineBase()) {
-      return (
-        `${what} needs a processing engine, and this page has none configured.\n\n` +
-        `Clipper's interface is static and hosts anywhere. The engine needs\n` +
-        `ffmpeg, OpenCV and faster-whisper, so it runs on a machine or a\n` +
-        `container rather than on a static host.\n\n` +
-        `Tried: ${where}` +
-        numbered("http://127.0.0.1:8000")
-      );
+      // The panel at the top of the page already explains this, and says it
+      // better than a paragraph of red console text can. So: one line, and a
+      // pointer. Repeating the same instructions twice reads as a scolding.
+      return `${what} needs Clipper running on a computer.\n\n` +
+        `No account, no payment, and your video never leaves your machine.\n` +
+        `The instructions at the top of this page do it in one command.`;
     }
     if (res.status === 404 || res.status === 405 || res.status === 501) {
       return (
@@ -1010,5 +1048,6 @@
   setupEnginePanel();
   setupStory();
   loadCaps();
+  fillInstallCommands();
   hideEngineGearIfSelfServing();
 })();
