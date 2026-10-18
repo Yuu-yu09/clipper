@@ -431,6 +431,62 @@
     }
   }
 
+  // ---------- one place that explains a failed engine call ----------
+  // Story mode used to surface `data.detail || "HTTP " + status`, which on a
+  // static host with no engine behind it produced a bare "Method Not Allowed".
+  // A reason phrase is not an explanation: the user cannot tell whether the
+  // engine is down, misconfigured, or simply not there.
+  //
+  // The distinction that matters is WHY, and only one of these is a real
+  // server answering:
+  //   - no engine configured at all  -> the page is static, nothing to call
+  //   - a 404 on an /api path         -> something is serving, but it is not
+  //                                      an engine (a CDN, a static host)
+  //   - 405 / 501                     -> a server is there, wrong method;
+  //                                      usually a rewrite swallowing POST
+  //   - 5xx / network failure         -> a real engine, broken or restarting
+  async function engineProblem(res, what) {
+    const where = engineBase() || "(same origin — no engine configured)";
+    const numbered = (n) =>
+      `\n\nTo fix it:\n` +
+      `1. Start the engine where you want the work done:  python run.py\n` +
+      `2. If this page is hosted somewhere else, open ⚙ engine and put\n` +
+      `   its address in the box (for example ${n}).`;
+
+    if (!engineBase()) {
+      return (
+        `${what} needs a processing engine, and this page has none configured.\n\n` +
+        `Clipper's interface is static and hosts anywhere. The engine needs\n` +
+        `ffmpeg, OpenCV and faster-whisper, so it runs on a machine or a\n` +
+        `container rather than on a static host.\n\n` +
+        `Tried: ${where}` +
+        numbered("http://127.0.0.1:8000")
+      );
+    }
+    if (res.status === 404 || res.status === 405 || res.status === 501) {
+      return (
+        `${what} failed: ${res.status} from ${engineBase()}.\n\n` +
+        `Something answered, but it is not a Clipper engine. This is what a\n` +
+        `static host returns for any /api/ path — the interface loaded from a\n` +
+        `CDN, so there is no backend behind it.\n\n` +
+        `Tried: ${engineBase()}` +
+        numbered("http://127.0.0.1:8000")
+      );
+    }
+    if (res.status >= 500) {
+      return (
+        `${what} failed: the engine at ${engineBase()} returned ${res.status}.\n\n` +
+        `It is running but errored. Check its console output.`
+      );
+    }
+    let detail = "";
+    try {
+      const t = (await res.text()).replace(/\s+/g, " ").trim();
+      if (t) detail = `\n\nEngine said: ${t.slice(0, 200)}`;
+    } catch { /* body already consumed or unreadable */ }
+    return `${what} failed: ${res.status} from ${engineBase()}.${detail}`;
+  }
+
   function poll() {
     clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
@@ -669,12 +725,17 @@
           use_llm: $("#usellm").checked,
         }),
       });
+      // Status first, body second. readJson() throws on a non-JSON body, so
+      // calling it before checking res.ok meant a static host's HTML/404 page
+      // hijacked the error and the real diagnosis was never shown.
+      if (!res.ok) throw new Error(await engineProblem(res, "Writing the season"));
       const data = await readJson(res);
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
       sPoll(data.id, "plan");
     } catch (e) {
       $("#splan").disabled = false;
-      showSErr(e.message);
+      showSErr(friendlyEngineError(e, "Writing the season"));
+      $("#enginepanel").classList.remove("hidden");
+      $("#engineurl").value = engineBase();
     }
   }
 
@@ -763,12 +824,15 @@
           auto_sfx: $("#sfx").checked,
         }),
       });
+      // status before body -- see the note in planSeason
+      if (!res.ok) throw new Error(await engineProblem(res, "Rendering the episodes"));
       const data = await readJson(res);
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
       sPoll(data.id, "render");
     } catch (e) {
       $("#renderall").disabled = false;
-      showSErr(e.message);
+      showSErr(friendlyEngineError(e, "Rendering the episodes"));
+      $("#enginepanel").classList.remove("hidden");
+      $("#engineurl").value = engineBase();
     }
   }
 
@@ -793,6 +857,22 @@
   }
 
   function showSErr(m) { const n = $("#serr"); n.textContent = m; n.classList.remove("hidden"); }
+  // A failed fetch never reaches engineProblem, because there is no response.
+  // "Failed to fetch" is just as unhelpful as "Method Not Allowed", so give it
+  // the same treatment.
+  function friendlyEngineError(e, what) {
+    const msg = String((e && e.message) || e);
+    if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+      return (
+        `${what} could not reach the engine at ` +
+        `${engineBase() || "(no engine configured)"}.\n\n` +
+        `The browser could not connect at all — nothing is listening there, ` +
+        `or the address is wrong, or it is blocked by CORS.\n\n` +
+        `Start it with:  python run.py`
+      );
+    }
+    return msg;
+  }
   function hideSErr() { $("#serr").classList.add("hidden"); }
 
   // ------------------------------------------------- reveal on scroll
