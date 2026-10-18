@@ -200,6 +200,22 @@ def main() -> int:
                 f"status={final.get('status')} error={str(final.get('error'))[:200]}")
 
     # ------------------------------------------------- 7. the results
+        # Read the transcript FIRST. Whether the source yielded words decides
+        # whether a missing .srt sidecar is a bug or simply the correct result
+        # for a silent input -- and the first fixture this ran against was
+        # silent, which made the caption assertions meaningless.
+        has_words = False
+        st, body, _ = get(base, f"/api/jobs/{jid}/artifact/transcript.json", timeout=60)
+        if st == 200:
+            t = json.loads(body)
+            utts = t.get("utterances") or []
+            words = sum(len(u.get("words") or []) for u in utts)
+            has_words = words > 0
+            R.check(has_words, "transcript has words",
+                    f"backend={t.get('backend')} utterances={len(utts)} words={words}")
+            if not has_words:
+                print("       WARNING: no speech detected, so captions, quotes "
+                      "and transcript-driven moments were NOT exercised")
     if final and final.get("status") == "done":
         res = final.get("result") or {}
         clips = res.get("clips") or []
@@ -216,24 +232,35 @@ def main() -> int:
 
             st, body, _ = get(base, f"/api/jobs/{jid}/artifact/clips/{cid}.srt",
                               timeout=60)
-            R.check(st == 200 and b"-->" in body, f"clip {cid} has an srt sidecar",
-                    f"status={st}")
+            if has_words:
+                R.check(st == 200 and b"-->" in body, f"clip {cid} has an srt sidecar",
+                        f"status={st}")
+            else:
+                print(f"       skip  clip {cid} srt sidecar "
+                      f"(source produced no words, so none is written)")
 
         for art in ("transcript.json", "graph.json", "signals.json"):
             st, body, _ = get(base, f"/api/jobs/{jid}/artifact/{art}", timeout=60)
             R.check(st == 200, f"artifact {art}", f"status={st}")
 
-        # the graph must be real, not an empty shell
+        # the graph must be real, not an empty shell. NB: graph.json carries the
+        # moments at the top level; the node/edge tallies live under "summary",
+        # so reading g["nodes"] here silently reports zero and looks like a
+        # broken graph when the graph is fine.
         st, body, _ = get(base, f"/api/jobs/{jid}/artifact/graph.json", timeout=60)
         if st == 200:
             try:
                 g = json.loads(body)
-                nodes = len(g.get("nodes") or [])
-                edges = len(g.get("edges") or [])
+                summary = g.get("summary") or {}
+                nodes = summary.get("nodes", 0)
+                edges = summary.get("edges", 0)
+                moments = len(g.get("moments") or [])
+                R.check(moments > 0, "moment graph has moments", f"moments={moments}")
                 R.check(nodes > 0, "moment graph has nodes", f"nodes={nodes}")
                 R.check(edges > 0, "moment graph has edges", f"edges={edges}")
-                print(f"       graph: {nodes} nodes, {edges} edges, "
-                      f"backend={g.get('backend')}")
+                print(f"       graph: {moments} moments, {nodes} nodes, {edges} edges, "
+                      f"backend={summary.get('backend')}, "
+                      f"communities={summary.get('communities')}")
             except json.JSONDecodeError:
                 R.check(False, "graph.json parses as JSON")
 

@@ -47,6 +47,8 @@
 
   let pollTimer = null;
   let currentJob = null;
+  let pollMisses = 0;
+  const POLL_MAX_MISSES = 8;
 
   // ---------------------------------------------------------------- tabs
   $$(".tab").forEach((t) =>
@@ -402,13 +404,17 @@
 
     try {
       const res = await fetch(api("/api/jobs"), { method: "POST", body: fd });
+      // status before body, and a real diagnosis rather than a reason phrase
+      if (!res.ok) throw new Error(await engineProblem(res, "Starting a job"));
       const data = await readJson(res);
-      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
       currentJob = data.id;
+      pollMisses = 0;
       poll();
     } catch (e) {
       $("#go").disabled = false;
-      showErr(e.message);
+      showErr(friendlyEngineError(e, "Starting a job"));
+      $("#enginepanel").classList.remove("hidden");
+      $("#engineurl").value = engineBase();
     }
   }
 
@@ -490,18 +496,38 @@
   function poll() {
     clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
+      let j;
       try {
-        const j = await (await fetch(api(`/api/jobs/${currentJob}`))).json();
-        setProgress(j.progress, j.step);
-        if (j.status === "running" || j.status === "queued") return poll();
-        $("#go").disabled = false;
-        if (j.status === "done") { render(j.result); return; }
-        if (j.status === "cancelled") return showErr("Cancelled.");
-        showErr(j.error || "Job failed.");
+        const res = await fetch(api(`/api/jobs/${currentJob}`));
+        if (!res.ok) throw new Error(await engineProblem(res, "Checking progress"));
+        j = await res.json();
       } catch (e) {
+        // Same reasoning as sPoll: a clip job runs for minutes. Ride out a
+        // dropped poll rather than telling the user it failed while the work
+        // is still going.
+        pollMisses++;
+        if (pollMisses < POLL_MAX_MISSES) {
+          setProgress(
+            parseFloat($("#barfill").style.width) || 30,
+            `still working — reconnecting (${pollMisses}/${POLL_MAX_MISSES})`
+          );
+          return void setTimeout(poll, Math.min(900 * pollMisses, 5000));
+        }
         $("#go").disabled = false;
-        showErr(e.message);
+        showErr(
+          friendlyEngineError(e, "Checking progress") +
+          `\n\nGave up after ${POLL_MAX_MISSES} consecutive attempts. ` +
+          `The job may still be running — check ${engineBase() || "the engine"}.`
+        );
+        return;
       }
+      pollMisses = 0;
+      setProgress(j.progress, j.step);
+      if (j.status === "running" || j.status === "queued") return poll();
+      $("#go").disabled = false;
+      if (j.status === "done") { render(j.result); return; }
+      if (j.status === "cancelled") return showErr("Cancelled.");
+      showErr(j.error || "Job failed.");
     }, 900);
   }
 
@@ -731,6 +757,7 @@
       if (!res.ok) throw new Error(await engineProblem(res, "Writing the season"));
       const data = await readJson(res);
       sPoll(data.id, "plan");
+      sMisses = 0;
     } catch (e) {
       $("#splan").disabled = false;
       showSErr(friendlyEngineError(e, "Writing the season"));
@@ -740,25 +767,55 @@
   }
 
   let sTimer = null;
+  let sMisses = 0;
+  // A season takes minutes. One dropped poll -- a laptop lid closing, a
+  // tunnel hiccup, the engine restarting -- used to end the run with "Failed
+  // to fetch" while the job was still going server-side. That is the worst
+  // possible failure: the work continues and the user is told it failed.
+  // So: ride out transient failures, and only give up once they persist.
+  const S_POLL_MAX_MISSES = 8;
+
   function sPoll(id, kind) {
     clearTimeout(sTimer);
     sTimer = setTimeout(async () => {
+      let j;
       try {
-        const j = await (await fetch(api(`/api/jobs/${id}`))).json();
-        sProgress(j.progress, j.step);
-        if (j.status === "running" || j.status === "queued") return sPoll(id, kind);
-        if (j.status === "done") {
-          $("#splan").disabled = false;
-          $("#sprogress").classList.add("hidden");
-          if (kind === "plan") return showSeason(j.result);
-          return showEpisodes(j.result);
+        const res = await fetch(api(`/api/jobs/${id}`));
+        if (!res.ok) throw new Error(await engineProblem(res, "Checking progress"));
+        j = await res.json();
+      } catch (e) {
+        sMisses++;
+        if (sMisses < S_POLL_MAX_MISSES) {
+          const wait = Math.min(900 * sMisses, 5000);
+          sProgress(
+            document.querySelector("#sbarfill").style.width
+              ? parseFloat(document.querySelector("#sbarfill").style.width)
+              : 30,
+            `still working — reconnecting (${sMisses}/${S_POLL_MAX_MISSES})`
+          );
+          return void setTimeout(() => sPoll(id, kind), wait);
         }
         $("#splan").disabled = false;
-        showSErr(j.error || "failed");
-      } catch (e) {
-        $("#splan").disabled = false;
-        showSErr(e.message);
+        $("#renderall").disabled = false;
+        showSErr(
+          friendlyEngineError(e, "Checking progress") +
+          `\n\nGave up after ${S_POLL_MAX_MISSES} consecutive attempts. ` +
+          `The job may still be running on the engine — check ` +
+          `${engineBase() || "the configured engine"}.`
+        );
+        return;
       }
+      sMisses = 0;
+      sProgress(j.progress, j.step);
+      if (j.status === "running" || j.status === "queued") return sPoll(id, kind);
+      if (j.status === "done") {
+        $("#splan").disabled = false;
+        $("#sprogress").classList.add("hidden");
+        if (kind === "plan") return showSeason(j.result);
+        return showEpisodes(j.result);
+      }
+      $("#splan").disabled = false;
+      showSErr(j.error || "failed");
     }, 900);
   }
 

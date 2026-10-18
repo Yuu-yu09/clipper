@@ -297,19 +297,21 @@ def _detect_cluster_backend() -> str:
     return "greedy-modularity"
 
 
-@app.get("/api/jobs/{job_id}/artifact/{name}")
+@app.get("/api/jobs/{job_id}/artifact/{name:path}")
 def artifact(job_id: str, name: str):
     """Serve a file produced by a job.
+
+    `name` is a :path parameter, so nested names such as
+    clips/m0007.srt reach the handler at all. Without it Starlette refuses to
+    match any request whose name contains a slash, and the caption download
+    link 404s for a reason that has nothing to do with the file existing.
 
     The pipeline writes its analysis into the job's work/ directory, so
     graph.json, transcript.json and signals.json physically live at
     work/<name>. The documented URLs -- and the ones the UI asks for -- are
     artifact/<name>, without that prefix, because nobody outside this process
-    should have to know the internal layout.
-
-    So: resolve the bare name at the job root first, then fall back to work/.
-    An explicit path like work/transcript.json still works, which keeps the
-    route useful for callers that do want to be specific.
+    should have to know the internal layout. So the bare name is resolved at
+    the job root first, then in work/.
     """
     base = _guard(job_id)
     parts = name.replace("\\", "/").split("/")
@@ -318,8 +320,18 @@ def artifact(job_id: str, name: str):
 
     root = base.resolve()
     candidates = [base / name]
+    leaf = parts[-1]
     if len(parts) == 1:
+        # analysis artefacts live in work/
         candidates.append(base / "work" / name)
+    elif parts[0] == "clips":
+        # Clip files are stored as clips/clip_<id>, but callers -- including
+        # the UI's caption download link -- ask for them by the bare clip id
+        # (`clips/m0007.srt`, the same id used for the .mp4). Apply the same
+        # mapping clip_video applies, or the .srt sidecar is unreachable.
+        stem, dot, ext = leaf.rpartition(".")
+        if stem.startswith("m") and stem[1:2].isdigit():
+            candidates.append(base / "clips" / f"clip_{stem}{dot}{ext}")
 
     for cand in candidates:
         path = cand.resolve()
