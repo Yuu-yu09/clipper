@@ -390,3 +390,22 @@ if _web.exists():
 @app.exception_handler(pipeline.PipelineError)
 def pipeline_error_handler(_request, exc: pipeline.PipelineError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request, exc: Exception):
+    """Always answer with JSON.
+
+    Starlette's default for an unhandled exception is a plain-text
+    "Internal Server Error" body, which a fetch(...).json() in the browser then
+    fails to parse -- so the user sees "Unexpected token" instead of anything
+    useful. Log the traceback for us; give the client something readable.
+    """
+    log.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"{type(exc).__name__}: {exc}",
+            "hint": "Check the server console for the full traceback.",
+        },
+    )

@@ -252,6 +252,15 @@ def main() -> int:
     if abs(r130 - 130.81) > 0.1:
         fails.append(f"pitch->key snapping wrong: {r130}")
 
+    # the note NAME must match the pitch class, not be offset from it.
+    # 330 Hz is E4 -- labelling it "G" would tell the user the wrong key.
+    name_cases = {(261.63): "C", (329.63): "E", (440.00): "A", (196.00): "G"}
+    for hz, want in name_cases.items():
+        got = soundtrack.note_name(hz)
+        print(f"    {hz:>7.2f} Hz -> {got} (expect {want})")
+        if got != want:
+            fails.append(f"note name for {hz}Hz was {got}, expected {want}")
+
     return finish(fails, dest)
 
 

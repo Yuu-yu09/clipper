@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -362,6 +361,18 @@ def root_from_pitch(f0_hz: float | None) -> float:
     return _A4 * (2 ** ((midi - 69) / 12.0))
 
 
+def note_name(hz: float) -> str:
+    """Scientific pitch name for a frequency, e.g. 329.63 -> "E".
+
+    Indexed by absolute pitch class. Deriving it from semitones-relative-to-A4
+    would put a constant offset on every name, labelling E4 as "G".
+    """
+    if not hz or hz <= 0:
+        return "C"
+    midi = int(round(69 + 12 * math.log2(hz / _A4)))
+    return _NOTE_NAMES[midi % 12]
+
+
 def mood_from_clip(features: dict, events: list | None = None,
                    persona: str = "general") -> tuple[str, str]:
     """Pick a music mood from the clip's own measured character.
@@ -422,9 +433,7 @@ def build_music_adaptive(
     cfg = cfg or get_config()
     mood, reason = mood_from_clip(features or {}, events or [], persona)
     root = root_from_pitch(f0_hz)
-    root_name = _NOTE_NAMES[int(round(12 * math.log2(root / _A4))) % 12]
-    # note names like "C#" are fine in a filename, but guard the separator
-    root_name = re.sub(r"[^A-Za-z0-9]", "", root_name) or "C"
+    root_name = note_name(root)
 
     workdir = workdir or (cfg.jobs_dir / "_music")
     dest = workdir / f"bed_{mood}_{root_name}_{int(round(root))}_{int(duration)}s.wav"

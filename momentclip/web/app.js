@@ -226,13 +226,14 @@
   async function loadCaps() {
     try {
       const c = await (await fetch("/api/health")).json();
-      const cap = (label, ok, extra = "") =>
-        `<span class="cap ${ok ? "on" : "off"}">${ok ? "✓" : "✕"} ${esc(label)}${extra}</span>`;
+      const cap = (label, ok) =>
+        `<span class="cap ${ok ? "on" : "off"}">${ok ? "✓" : "✕"} ${esc(label)}</span>`;
       $("#caps").innerHTML = [
         cap("ffmpeg", c.ffmpeg),
         cap("transcribe", c.transcription.faster_whisper || c.transcription.http),
         cap("captions", c.libass),
         cap("face track", c.face_tracking ?? c.opencv),
+        cap("AI judge", c.llm_configured),
         cap("yt-dlp", c.yt_dlp),
         cap("no watermark", c.watermark === false),
       ].join("");
@@ -339,13 +340,32 @@
 
     try {
       const res = await fetch("/api/jobs", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
       currentJob = data.id;
       poll();
     } catch (e) {
       $("#go").disabled = false;
       showErr(e.message);
+    }
+  }
+
+  // A 500 from any middleware or proxy arrives as plain text or HTML, so
+  // parsing blindly with res.json() throws a message that tells the user
+  // nothing. Read the body as text first and make a real message from it.
+  async function readJson(res) {
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      const snippet = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      if (res.status >= 500) {
+        throw new Error(
+          `Server error ${res.status}. Is the server still running?\n` +
+          `Restart it with:  python run.py\n\nServer said: ${snippet.slice(0, 200)}`);
+      }
+      throw new Error(`Unexpected response from the server: ${snippet.slice(0, 200)}`);
     }
   }
 
