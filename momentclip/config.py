@@ -85,6 +85,13 @@ class Config:
     llm_api_key: str | None = field(default_factory=lambda: os.getenv("CLIPPER_LLM_API_KEY"))
     llm_model: str | None = field(default_factory=lambda: os.getenv("CLIPPER_LLM_MODEL"))
     llm_top_k: int = field(default_factory=lambda: _env_int("CLIPPER_LLM_TOP_K", 24))
+    # Bound the judge's reply. It only ever returns a small JSON object --
+    # one score triple per shortlisted clip -- so an unbounded generation
+    # buys nothing and costs a great deal on a local CPU model, which
+    # otherwise keeps writing until EOS. 24 clips at ~45 tokens each plus
+    # slack; a model that exceeds it was not going to be parsed anyway.
+    llm_max_tokens: int = field(
+        default_factory=lambda: _env_int("CLIPPER_LLM_MAX_TOKENS", 1400))
 
     # --- optional vision pass (visual prompt cues) ----------------------
     use_vision: bool = field(default_factory=lambda: _env_bool("CLIPPER_USE_VISION", True))

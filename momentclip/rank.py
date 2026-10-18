@@ -255,17 +255,22 @@ def llm_judge(ranked: list[Ranked], persona: str = "general",
         "model": cfg.llm_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
+        # Bounded on purpose: see Config.llm_max_tokens. Without this a local
+        # CPU model can spend minutes writing past the JSON it already
+        # finished, which is the difference between a prompt that feels
+        # instant and one that looks hung.
+        "max_tokens": cfg.llm_max_tokens,
         "response_format": {"type": "json_object"},
     }
     try:
-        raw = _chat(cfg, payload)
+        raw = _chat(cfg, payload, base, api_key)
         parsed = _parse_scores(raw)
         if not parsed:
             # Some local servers advertise json_object but ignore it, or reject
             # it outright. Retry once without the hint rather than giving up.
             log.info("no scores parsed with response_format; retrying without it")
             raw = _chat(cfg, {k: v for k, v in payload.items()
-                              if k != "response_format"})
+                              if k != "response_format"}, base, api_key)
             parsed = _parse_scores(raw)
     except Exception as exc:  # noqa: BLE001
         log.warning("LLM judge failed (%s), keeping heuristic order", exc)
@@ -306,11 +311,30 @@ def llm_judge(ranked: list[Ranked], persona: str = "general",
     return out
 
 
-def _chat(cfg: Config, payload: dict) -> str:
-    url = cfg.llm_base_url.rstrip("/") + "/chat/completions"
+def _chat(cfg: Config, payload: dict,
+          base: str | None = None, api_key: str | None = None) -> str:
+    """Call an OpenAI-compatible chat endpoint.
+
+    `base` and `api_key` must be the values _endpoint() resolved, NOT
+    cfg.llm_base_url / cfg.llm_api_key. Those are only populated when someone
+    set the environment variables by hand; when a provider is auto-detected
+    -- which is how Ollama, Groq, Gemini and OpenRouter all work -- they stay
+    None.
+
+    Reading them here meant llm_judge() would resolve a working endpoint,
+    decide to call it, then dereference None, raise AttributeError, get caught
+    by its own except, and fall back to the heuristic order. The AI judge
+    therefore did nothing for every auto-detected provider while the UI
+    cheerfully showed a green "AI judge" chip.
+    """
+    if base is None:
+        base, api_key, _ = _endpoint(cfg)
+    if not base:
+        raise RuntimeError("no LLM endpoint resolved")
+    url = base.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
-    if cfg.llm_api_key:
-        headers["Authorization"] = f"Bearer {cfg.llm_api_key}"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  headers=headers)
     with urllib.request.urlopen(req, timeout=180) as resp:
