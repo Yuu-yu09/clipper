@@ -18,7 +18,7 @@ import logging
 import os
 import shutil
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -322,6 +322,8 @@ def assemble_episode(
         if progress:
             progress(5, f"episode {ep.number}: {len(specs)} shots")
 
+        workers = max_workers if max_workers else DEFAULT_WORKERS
+
         # ---- 1. each shot, in parallel ----
         # Shots share nothing: each is an independent ffmpeg process over its
         # own image. Running them one at a time left every core but one idle.
@@ -341,8 +343,8 @@ def assemble_episode(
                 log.warning("shot %d raised: %s", i, exc)
                 return i, dest, False
 
-        if max_workers > 1 and len(specs) > 1:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(specs))) as pool:
+        if workers > 1 and len(specs) > 1:
+            with ThreadPoolExecutor(max_workers=min(workers, len(specs))) as pool:
                 for i, dest, ok in pool.map(one, enumerate(specs)):
                     if ok:
                         parts.append(dest)
@@ -372,15 +374,31 @@ def assemble_episode(
         lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts),
                        encoding="utf-8")
         duration = sum(s.seconds for s in specs)
+        # Cut the shots together by remuxing, not re-encoding. Every shot is
+        # already H.264 at identical settings, so re-encoding the whole episode
+        # here was paying for a second full generation pass -- slow, and it
+        # threw away quality that had just been computed. `-c copy` is close to
+        # instant; the re-encode stays as a fallback for the case where copy
+        # cannot handle the stream (mismatched parameters, odd timestamps).
+        def _concat(copy_streams: bool) -> None:
+            cmd = [cfg.ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(lst)]
+            if copy_streams:
+                cmd += ["-c", "copy", "-an"]
+            else:
+                cmd += ["-c:v", ffmpeg.pick_h264_encoder(), "-preset", "veryfast",
+                        "-crf", "20", "-pix_fmt", "yuv420p", "-an"]
+            cmd += [str(silent)]
+            ffmpeg.run(cmd, timeout=1800)
+
         try:
-            ffmpeg.run([
-                cfg.ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
-                "-c:v", ffmpeg.pick_h264_encoder(), "-preset", "veryfast",
-                "-crf", "20", "-pix_fmt", "yuv420p", "-an", str(silent),
-            ], timeout=1800)
+            _concat(copy_streams=True)
         except Exception as exc:  # noqa: BLE001
-            return EpisodeResult(ep.number, ep.title, None, 0.0, len(parts),
-                                 notes=notes, error=f"concat failed: {exc}")
+            log.info("concat by copy failed (%s), re-encoding instead", exc)
+            try:
+                _concat(copy_streams=False)
+            except Exception as exc2:  # noqa: BLE001
+                return EpisodeResult(ep.number, ep.title, None, 0.0, len(parts),
+                                     notes=notes, error=f"concat failed: {exc2}")
 
         # ---- 3. score it ----
         if progress:
@@ -515,6 +533,7 @@ def assemble_season(
     music_mood: str = "auto",
     auto_sfx: bool = True,
     max_episodes: int | None = None,
+    max_workers: int | None = None,
     progress=None,
 ) -> tuple[list[EpisodeResult], dict]:
     """Assemble every episode. Returns (results, season dict)."""
@@ -524,14 +543,48 @@ def assemble_season(
     eps = season.episodes[:max_episodes] if max_episodes else season.episodes
 
     results: list[EpisodeResult] = []
-    for i, ep in enumerate(eps):
-        def prog(p: int, msg: str, _i=i) -> None:
-            if progress:
-                progress(_i * 100 // max(1, len(eps)) + p * 100 // max(
-                    100, max(1, len(eps))), msg)
+    n = max(1, len(eps))
 
-        results.append(assemble_episode(
+    # Episodes are independent of each other, exactly as shots are within one.
+    # Rendering them one after another is why a ten-episode season felt like a
+    # chore: one ffmpeg at a time on a twelve-core machine.
+    #
+    # But do not also give each episode the full shot budget on top of this, or
+    # ten episodes would each spawn six ffmpegs and thrash. Split the cores:
+    # a few episodes in flight, each using the rest for its own shots.
+    if max_workers is not None:
+        ep_workers, shot_workers = max_workers, max_workers
+    else:
+        ep_workers = max(1, min(3, DEFAULT_WORKERS // 2))
+        shot_workers = max(1, DEFAULT_WORKERS // ep_workers)
+
+    def make(i: int, ep: Episode) -> EpisodeResult:
+        def prog(p: int, msg: str, _i: int = i) -> None:
+            if progress:
+                # each episode owns a slice of the bar
+                progress(int((_i * 100) / n) + int(p / max(1, n)), msg)
+
+        return assemble_episode(
             ep, outdir, cfg, width=w, height=h, aspect=aspect,
             caption_style=caption_style, music_mood=music_mood,
-            auto_sfx=auto_sfx, progress=prog))
+            auto_sfx=auto_sfx, max_workers=shot_workers, progress=prog)
+
+    if ep_workers > 1 and len(eps) > 1:
+        # collect by index so episode order never depends on which finished
+        # first
+        ordered: list[EpisodeResult | None] = [None] * len(eps)
+        with ThreadPoolExecutor(max_workers=min(ep_workers, len(eps))) as pool:
+            futures = {pool.submit(make, i, ep): i for i, ep in enumerate(eps)}
+            for fut in as_completed(futures):
+                i = futures[fut]
+                try:
+                    ordered[i] = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    ordered[i] = EpisodeResult(
+                        eps[i].number, eps[i].title, None, 0.0, 0,
+                        error=f"assembly failed: {exc}")
+        results = [r for r in ordered if r is not None]
+    else:
+        for i, ep in enumerate(eps):
+            results.append(make(i, ep))
     return results, season.to_dict()

@@ -36,6 +36,12 @@
     $("#enginesave").addEventListener("click", () => {
       localStorage.setItem(API_KEY, input.value.trim().replace(/\/+$/, ""));
       panel.classList.add("hidden");
+      $("#engine").classList.remove("hidden");
+      loadCaps();
+    });
+    $("#enginesave").addEventListener("click", () => {
+      localStorage.setItem(API_KEY, input.value.trim().replace(/\/+$/, ""));
+      panel.classList.add("hidden");
       loadCaps();
     });
     $("#engineclear").addEventListener("click", () => {
@@ -43,6 +49,44 @@
       panel.classList.add("hidden");
       loadCaps();
     });
+  }
+
+  // Hide the gear unless it is actually needed.
+  //
+  // When someone runs `python run.py` and opens http://127.0.0.1:8000, the
+  // page is being served by the thing that does the work, same-origin, and
+  // there is nothing to configure. That is the case for nearly everyone, and
+  // asking them about "engines" there is pure friction in front of the one
+  // thing they came to do.
+  //
+  // So: assume self-serving, and only surface the control when a same-origin
+  // probe fails, or when they have explicitly pointed us elsewhere.
+  async function hideEngineGearIfSelfServing() {
+    if (localStorage.getItem(API_KEY) !== null) return false; // explicit choice
+    if (typeof window.CLIPPER_API === "string" && window.CLIPPER_API) {
+      return false;
+    }
+    try {
+      const c = await (await fetch("/api/health")).json();
+      if (c && c.ok) {
+        $("#engine").classList.add("hidden");
+        $("#enginepanel").classList.add("hidden");
+        selfServing = true;
+        return true;
+      }
+    } catch { /* not self-serving, fall through */ }
+    return false;
+  }
+
+  // Show the engine controls only when they are the thing that would help.
+  // For a self-served page the answer is already in the error text, so
+  // revealing a URL box would be noise.
+  let selfServing = false;
+  function revealEngine() {
+    if (selfServing) return;
+    $("#engine").classList.remove("hidden");
+    $("#enginepanel").classList.remove("hidden");
+    $("#engineurl").value = engineBase();
   }
 
   let pollTimer = null;
@@ -413,8 +457,7 @@
     } catch (e) {
       $("#go").disabled = false;
       showErr(friendlyEngineError(e, "Starting a job"));
-      $("#enginepanel").classList.remove("hidden");
-      $("#engineurl").value = engineBase();
+      revealEngine();
     }
   }
 
@@ -967,4 +1010,5 @@
   setupEnginePanel();
   setupStory();
   loadCaps();
+  hideEngineGearIfSelfServing();
 })();
