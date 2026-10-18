@@ -1,0 +1,32 @@
+# Clipper dependencies
+#
+# Only fastapi/uvicorn/numpy are required to run. Everything else is optional
+# and degrades gracefully -- see README "Graceful degradation".
+
+# --- server ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9      # multipart/form-data for uploads
+
+# --- signal analysis ---
+numpy>=1.24
+
+# --- graph (required for the moment graph) ---
+networkx>=3.0
+# python-louvain            # optional: better communities than the fallback
+# graphifyy                  # optional: Apache-2.0, used when installed
+
+# --- transcription ---
+# faster-whisper>=1.0        # local, free, word-level timestamps  <-- recommended
+# openai-whisper             # alternative (slower, needs torch)
+# yt-dlp>=2024.1.1           # only needed for the "paste a link" tab
+#
+# IMPORTANT: faster-whisper calls av.open(metadata_errors=...), which PyAV
+# removed in 19.0. Pin av<19 or transcription silently fails:
+#     pip install "av<19" faster-whisper
+
+# --- reframe (speaker-aware cropping) ---
+# opencv-python>=4.9         # bundled Haar face detector; falls back to centre crop
+
+# --- read the docs PDF offline (nice-to-have, not required) ---
+# pypdf>=4.0

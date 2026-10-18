@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clipper — find the good moments</title>
+<link rel="stylesheet" href="/style.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✂️</text></svg>" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">✂️</span>
+    <div>
+      <h1>Clipper</h1>
+      <p class="tagline">Long video in. The funny, candid and surprising parts out. No watermark, ever.</p>
+    </div>
+  </div>
+  <div id="caps" class="caps"></div>
+</header>
+
+<main>
+  <!-- ---------------- intake ---------------- -->
+  <section id="intake" class="card">
+    <div class="tabs">
+      <button class="tab active" data-tab="file">Upload a video</button>
+      <button class="tab" data-tab="url">Paste a link</button>
+    </div>
+
+    <div class="tabpane active" data-pane="file">
+      <label id="drop" class="drop">
+        <input type="file" id="file" accept="video/*,audio/*" hidden />
+        <div class="drop-inner">
+          <strong>Drop a video here</strong>
+          <span>or click to browse — the file never leaves this machine</span>
+        </div>
+      </label>
+      <div id="pickname" class="pickname"></div>
+    </div>
+
+    <div class="tabpane" data-pane="url">
+      <input type="url" id="url" placeholder="https://youtube.com/watch?v=..." />
+      <p class="hint">Requires <code>yt-dlp</code> on PATH.</p>
+    </div>
+
+    <div class="options">
+      <div class="opt">
+        <label>What are we hunting for?</label>
+        <div class="segmented" id="persona">
+          <button data-v="funny">😄 Funny</button>
+          <button data-v="candid">💬 Candid</button>
+          <button data-v="surprising">😲 Surprising</button>
+          <button data-v="general" class="on">✨ Best overall</button>
+        </div>
+      </div>
+      <div class="opt">
+        <label>Aspect</label>
+        <div class="segmented" id="aspect">
+          <button data-v="9:16" class="on">9:16</button>
+          <button data-v="1:1">1:1</button>
+          <button data-v="4:5">4:5</button>
+          <button data-v="16:9">16:9</button>
+        </div>
+      </div>
+      <div class="opt">
+        <label>Caption style</label>
+        <div class="segmented" id="cstyle">
+          <button data-v="pop" class="on">Pop</button>
+          <button data-v="clean">Clean</button>
+          <button data-v="podcast">Podcast</button>
+          <button data-v="none">Off</button>
+        </div>
+      </div>
+      <div class="opt switches">
+        <label class="sw"><input type="checkbox" id="reframe" checked /><span>Auto-reframe to speaker</span></label>
+        <label class="sw"><input type="checkbox" id="usegraph" checked /><span>Moment graph</span></label>
+        <label class="sw"><input type="checkbox" id="usellm" checked /><span>LLM judge <em id="llmnote"></em></span></label>
+      </div>
+    </div>
+
+    <button id="go" class="go">Find the moments</button>
+    <div id="progress" class="progress hidden">
+      <div class="bar"><i id="barfill"></i></div>
+      <span id="progtext">starting…</span>
+      <button id="cancel" class="link">cancel</button>
+    </div>
+    <div id="err" class="err hidden"></div>
+  </section>
+
+  <!-- ---------------- results ---------------- -->
+  <section id="results" class="hidden">
+    <div class="card summary" id="summary"></div>
+    <div class="graphbox" id="graphbox"></div>
+    <div id="clips" class="clips"></div>
+  </section>
+</main>
+
+<footer>
+  <span>Free &amp; open source · runs entirely on your machine · <strong>no watermark</strong></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

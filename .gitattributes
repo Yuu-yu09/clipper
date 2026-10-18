@@ -1,0 +1,23 @@
+# Normalise line endings so the repo is identical on every platform.
+* text=auto eol=lf
+
+*.py    text diff=python
+*.js    text
+*.css   text
+*.html  text
+*.md    text
+*.txt   text
+*.toml  text
+*.json  text
+
+# Binary-ish — never diff or transform these.
+*.mp4   binary
+*.mkv   binary
+*.webm  binary
+*.mov   binary
+*.wav   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.srt   text
+*.ass   text
